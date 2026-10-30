@@ -36,6 +36,22 @@ function harness({
 }
 
 describe("authentication and generated samples", () => {
+  it("serves API discovery at the root without credentials or a Suno connection", async () => {
+    const { app, calls, url } = harness();
+    const res = await app.request(url("/"));
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("Content-Type") ?? "", /application\/json/);
+    const responseText = await res.text();
+    const body = JSON.parse(responseText) as { service: string; health: string; endpoints: Record<string, string> };
+    assert.equal(body.service, "suno-mcp-rest-bridge");
+    assert.equal((await app.request(url(body.health))).status, 200);
+    for (const path of Object.values(body.endpoints)) {
+      assert.equal((await app.request(url(path))).status, 401);
+    }
+    assert.equal(calls.length, 0);
+    assert.ok(!responseText.includes("test-secret"));
+  });
+
   it("rejects missing or wrong credentials", async () => {
     const { app, url } = harness();
     assert.equal((await app.request(url("/api/usage"))).status, 401);
