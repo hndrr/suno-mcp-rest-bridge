@@ -22,6 +22,8 @@ npm test      # Sunoにはアクセスしないモックテスト
 npm run test:upload-smoke  # Node.js標準機能だけで動くアップロード単体テスト
 ```
 
+ブラウザで <http://127.0.0.1:8787/> を開くとAPIの案内をJSONで表示します。Web操作画面はありません。<http://127.0.0.1:8787/health> は認証なしで起動確認でき、`/api/*` の呼び出しには `Authorization: Bearer YOUR_KEY` が必要です。コードを変更した場合は `npm run dev` を再起動してください。
+
 以下の例では `YOUR_KEY` を `.env` の `API_KEY` に置き換えてください。
 
 ## 短尺サンプル（15秒・1曲）

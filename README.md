@@ -1,4 +1,4 @@
-# Suno MCP → REST API bridge (TypeScript / Hono)
+# [WIP] Suno MCP → REST API bridge (TypeScript / Hono)
 
 An **unofficial, single-account local** REST adapter for Suno's **official MCP** endpoint at `https://api.suno.com/mcp`. Supports short samples, custom songs, library search, source-audio uploads, covers, mashups, extensions, full-song joining and status polling. **No unofficial Suno scraper or third-party Suno API is involved.**
 
@@ -25,6 +25,8 @@ npm run typecheck
 npm test      # mock tests: do NOT generate songs or use Suno credits
 ```
 
+Open <http://127.0.0.1:8787/> for a JSON API directory; this bridge does not include a browser UI. Use <http://127.0.0.1:8787/health> to check the local server without authentication. Requests to `/api/*` require `Authorization: Bearer YOUR_LOCAL_API_KEY`. Restart `npm run dev` after code changes.
+
 The OAuth credentials are stored locally by `mcp-remote` (typically under `~/.mcp-auth`). **Do not share** that directory or `.env`. Your Suno account must be authorized and have the required permissions. Tools may not be granted on every account / plan.
 
 For the following shell examples, replace `YOUR_LOCAL_API_KEY` with the value from `.env`:
@@ -38,6 +40,7 @@ export API_KEY=YOUR_LOCAL_API_KEY
 
 | Method | Path | Suno MCP tool | Description |
 |---|---|---|---|
+| GET | `/` | — | API directory and authentication instructions |
 | GET | `/health` | — | Local server health (not an OAuth check) |
 | GET | `/api/tools` | tools/list | Discover actual tool names and input schemas |
 | GET | `/api/usage` | `account-usage` | Plan/credits |

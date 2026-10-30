@@ -92,6 +92,16 @@ export function createApp({
   const putUpload = tools.putUpload ?? putSignedUpload;
   const app = new Hono();
 
+  app.get("/", (c) => c.json({
+    service: "suno-mcp-rest-bridge",
+    health: "/health",
+    authentication: "Use Authorization: Bearer <API_KEY> for /api/* requests",
+    endpoints: {
+      tools: "/api/tools",
+      usage: "/api/usage",
+      library: "/api/library"
+    }
+  }));
   app.get("/health", (c) => c.json({ ok: true }));
   app.use("/api/*", async (c, next) => {
     const header = c.req.header("Authorization");
