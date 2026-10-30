@@ -6,7 +6,14 @@ const require = createRequire(import.meta.url);
 const remoteProxyPath = require.resolve("mcp-remote/dist/proxy.js");
 const sunoMcpUrl = process.env.SUNO_MCP_URL ?? "https://api.suno.com/mcp";
 
-export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+// Interfaces keep Hono's JSON response types from expanding this recursive union indefinitely.
+export type JsonValue = string | number | boolean | null | JsonArray | JsonObject;
+
+export interface JsonArray extends Array<JsonValue> {}
+
+export interface JsonObject {
+  [key: string]: JsonValue;
+}
 
 export type SunoTool = {
   name: string;
