@@ -62,6 +62,8 @@ export API_KEY=YOUR_LOCAL_API_KEY
 
 MCP tool names may use hyphens or underscores; the adapter accepts both. The `ALLOWED_TOOLS` setting governs the **generic endpoint only**: dedicated routes above are available to an authorized caller independently. Inspect `/api/tools` for the list granted to your account.
 
+Text-only MCP responses expose their structured payload or a single decoded JSON payload directly. When a response includes audio, images or resources, the bridge returns the original `content` array and any `structuredContent` field together so clients can retain every block. These are the [MCP tool result content types](https://modelcontextprotocol.io/specification/2025-06-18/server/tools#tool-result).
+
 ## 1. Make a short sample (15 seconds)
 
 ```bash
@@ -125,7 +127,7 @@ You can also open `upload_page_url` in your browser instead of doing step 2 with
 
 ### Attached-file metadata
 
-If your client already has an attachment's download URL and file ID, `POST /api/uploads/sessions` also accepts `file: {"download_url":"https://files.example.net/reference.wav","file_id":"ATTACHMENT_ID"}` with optional `file_name` and `mime_type` inside `file`, plus an optional top-level `title`. Suno retrieves the attachment directly and the bridge returns the processing clip with HTTP 202; no separate PUT or completion call is needed. Without `file`, the endpoint returns a session with HTTP 201 as above. Use actual attachment metadata, and keep its download URL private. Local files can continue to use `/api/uploads/file`.
+If your client already has an attachment's download URL and file ID, `POST /api/uploads/sessions` also accepts `file: {"download_url":"https://files.example.net/reference.wav","file_id":"ATTACHMENT_ID"}` with optional `file_name` and `mime_type` inside `file`, plus an optional top-level `title`. The bridge checks attachment field types and preserves additional provider metadata; Suno validates whether the attachment can actually be retrieved. Suno retrieves the attachment directly and the bridge returns the processing clip with HTTP 202; no separate PUT or completion call is needed. Without `file`, the endpoint returns a session with HTTP 201 as above. Use actual attachment metadata, and keep its download URL private. Local files can continue to use `/api/uploads/file`.
 
 ## 3. Cover the reference
 

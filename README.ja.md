@@ -58,7 +58,7 @@ curl -X POST http://127.0.0.1:8787/api/uploads/file \
 
 処理結果の `clip_id` を取得し、`GET /api/songs/{clip_id}` で `status=complete` になるまで確認します。`MAX_UPLOAD_MB=32` がブリッジの初期上限です。大きい音源は `POST /api/uploads/sessions` で署名付きURLを取得し、直接PUTしてから `POST /api/uploads/{session_id}/complete` します。
 
-チャット添付のメタデータがある場合、`POST /api/uploads/sessions` に `file: {"download_url":"https://files.example.net/reference.wav","file_id":"ATTACHMENT_ID"}` も指定できます。`file_name` と `mime_type` は `file` 内の任意項目です。Sunoが直接取得して処理中の曲を返すため、この場合はHTTP 202となり、追加のPUT・完了通知は不要です。`file` なしの従来のセッション作成はHTTP 201です。添付URLは実際のものを使い、非公開にしてください。
+チャット添付のメタデータがある場合、`POST /api/uploads/sessions` に `file: {"download_url":"https://files.example.net/reference.wav","file_id":"ATTACHMENT_ID"}` も指定できます。`file_name` と `mime_type` は `file` 内の任意項目です。ブリッジはフィールドの型を検査し、添付元の追加メタデータも保持して転送します。実際に取得できる添付かどうかはSunoが検証します。Sunoが直接取得して処理中の曲を返すため、この場合はHTTP 202となり、追加のPUT・完了通知は不要です。`file` なしの従来のセッション作成はHTTP 201です。添付URLは実際のものを使い、非公開にしてください。
 
 ## 参照音源からCover（30秒）
 
@@ -89,6 +89,8 @@ curl -X POST http://127.0.0.1:8787/api/songs/SOURCE_CLIP_ID/cover \
 | `POST /api/tools/:name/call` | 明示的に許可したツールの汎用呼び出し |
 
 詳細なパラメータ・使用例・注意点は [README.md](README.md) に記載しています。
+
+音声・画像・リソースを含むMCP応答は、元の `content` 配列と、存在する場合は `structuredContent` をまとめて返します。テキストだけの応答は、構造化データまたは単一のJSONデータを直接返します。
 
 ## 制約
 

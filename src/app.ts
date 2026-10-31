@@ -76,6 +76,7 @@ function validId(id: string): string {
   return id;
 }
 
+/** Build the authenticated REST API with injectable MCP operations and upload limits. */
 export function createApp({
   apiKey,
   tools,

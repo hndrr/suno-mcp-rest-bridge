@@ -46,4 +46,39 @@ describe("Suno MCP result normalization", () => {
     assert.deepEqual(simplifyToolResult({ content }), { content });
     assert.deepEqual(simplifyToolResult({}), { content: [] });
   });
+
+  it("preserves audio, images and resources alongside JSON and guidance text", () => {
+    const mediaBlocks = [
+      { type: "audio", data: "AA==", mimeType: "audio/wav" },
+      { type: "image", data: "AA==", mimeType: "image/png" },
+      { type: "resource_link", uri: "https://files.example.net/reference.wav", name: "reference.wav" },
+      { type: "resource", resource: { uri: "https://files.example.net/reference.wav", mimeType: "audio/wav", blob: "AA==" } }
+    ];
+    for (const media of mediaBlocks) {
+      const content = [
+        { type: "text", text: '{"id":"first","status":"complete"}' },
+        { type: "text", text: "The song is ready." },
+        media
+      ];
+      assert.deepEqual(simplifyToolResult({ content }), { content });
+    }
+  });
+
+  it("preserves media when the only text block is not JSON", () => {
+    const content = [
+      { type: "text", text: "The song is ready." },
+      { type: "audio", data: "AA==", mimeType: "audio/wav" }
+    ];
+    assert.deepEqual(simplifyToolResult({ content }), { content });
+  });
+
+  it("preserves structured payloads together with mixed-media content", () => {
+    const content = [
+      { type: "text", text: '{"id":"text-version"}' },
+      { type: "audio", data: "AA==", mimeType: "audio/wav" }
+    ];
+    for (const structuredContent of [{ id: "structured-version" }, null]) {
+      assert.deepEqual(simplifyToolResult({ structuredContent, content }), { structuredContent, content });
+    }
+  });
 });

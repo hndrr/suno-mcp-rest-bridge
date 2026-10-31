@@ -13,6 +13,7 @@ const upstreamSnapshot = JSON.parse(readFileSync(
 )) as { tools: Array<{ name: string; inputSchema: { properties: Record<string, unknown>; required?: string[] } }> };
 const upstreamSchemas = new Map(upstreamSnapshot.tools.map((tool) => [tool.name, tool.inputSchema]));
 
+/** Build an isolated bridge whose mock calls are checked against the captured MCP contract. */
 function harness({
   uploadResult = { id: "session-123", upload_url: "https://storage.example.net/upload" } as JsonValue,
   maxUploadBytes = 1024 * 1024,
@@ -271,9 +272,21 @@ describe("reference audio uploads", () => {
   it("validates attachment metadata and prevents passing file to upload completion", async () => {
     const { post, calls } = harness();
     assert.equal((await post("/api/uploads/sessions", { file: { download_url: "https://files.example.net/audio.wav" } })).status, 400);
-    assert.equal((await post("/api/uploads/sessions", { file: { download_url: "invalid", file_id: "attachment" } })).status, 400);
+    assert.equal((await post("/api/uploads/sessions", { file: { download_url: 42, file_id: "attachment" } })).status, 400);
+    assert.equal((await post("/api/uploads/sessions", { file: { download_url: "https://files.example.net/audio.wav", file_id: null } })).status, 400);
     assert.equal((await post("/api/uploads/session/complete", { file: { download_url: "https://files.example.net/audio.wav", file_id: "attachment" } })).status, 400);
     assert.equal(calls.length, 0);
+  });
+
+  it("preserves attachment provider metadata without imposing extra string constraints", async () => {
+    const { post, calls } = harness();
+    const file = {
+      download_url: "provider:attachment",
+      file_id: "",
+      provider_metadata: { original_name: "reference.wav", expires_at: 1234567890 }
+    };
+    assert.equal((await post("/api/uploads/sessions", { file })).status, 202);
+    assert.deepEqual(calls, [{ name: "audio-upload-create", args: { file } }]);
   });
 
   it("rejects oversized uploads before touching Suno", async () => {
