@@ -70,7 +70,7 @@ MCP tool names may use hyphens or underscores; the adapter accepts both. The `AL
 
 Text-only MCP responses expose their structured payload or a single decoded JSON payload directly; supplementary guidance prose is intentionally omitted from these JSON responses. When a response includes audio, images or resources, the bridge returns the original `content` array and any `structuredContent` field together so clients can retain every block. These are the [MCP tool result content types](https://modelcontextprotocol.io/specification/2025-06-18/server/tools#tool-result).
 
-When a Suno tool refuses a request, the response body is `{"error":"Suno MCP tool failed","details":{...}}`, with Suno's own error in `details`. The HTTP status follows `details.code`:
+When a Suno tool refuses a request, the response body is `{"error":"Suno MCP tool failed","details":...}`, with Suno's own error in `details`. It's usually an object with a `code`, but it can be any JSON value, such as `null`, a string or an array, so check its type before reading `details.code`. The HTTP status follows that code:
 
 | `details.code` | HTTP status |
 |---|---|
@@ -79,7 +79,7 @@ When a Suno tool refuses a request, the response body is `{"error":"Suno MCP too
 | `forbidden`, `feature_not_on_plan` | 403 |
 | `not_found` | 404 |
 | `rate_limited`, `quota_exceeded` | 429 |
-| Any other or missing code | 502 |
+| Any other or missing code, or `details` that isn't an object | 502 |
 
 Connection failures also return 502, without `details`. Suno's MCP errors don't include an HTTP status, so a code missing from this table stays 502 even if Suno's documentation lists a different status for it; check `details.code` in that case.
 
