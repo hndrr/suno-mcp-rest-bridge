@@ -874,6 +874,120 @@ describe("clip status events", () => {
   });
 });
 
+describe("listening without download credits", () => {
+  const first = "99523f88-c613-436d-ac2c-1bbeda8cd6a1";
+  const second = "646f70b8-4cdf-49c3-a7df-7b23f778d73b";
+  const playable = (id: string, status = "complete") => ({
+    id, status, song_url: `https://suno.com/song/${id}`
+  });
+  const embedded = (id: string, status = "complete") => ({
+    ...playable(id, status), embed_url: `https://suno.com/embed/${id}`
+  });
+
+  it("adds embed_url beside song_url in every response shape", async () => {
+    const shapes: Array<[string, string, JsonValue, JsonValue]> = [
+      ["/api/songs/source", "audio-retrieve", playable(first), embedded(first)],
+      ["/api/library", "library-list", { items: [playable(first)] }, { items: [embedded(first)] }],
+      ["/api/playlists/p/songs", "playlists-list-clips", { clips: [playable(first)] }, { clips: [embedded(first)] }],
+      ["/api/songs/source/wait", "audio-wait", { ...playable(first), clips: [playable(first)] }, { ...embedded(first), clips: [embedded(first)] }]
+    ];
+    for (const [path, tool, result, expected] of shapes) {
+      const { get } = harness({ toolResults: { [tool]: result } });
+      assert.deepEqual(await (await get(path)).json(), expected, path);
+    }
+  });
+
+  it("leaves results without a Suno song link unchanged", async () => {
+    const results: JsonValue[] = [
+      { id: first, status: "queued" },
+      { id: first, song_url: null },
+      { id: first, song_url: "https://example.net/song/other" },
+      { id: first, song_url: "https://suno.com/playlist/other" }
+    ];
+    for (const result of results) {
+      const { get } = harness({ toolResults: { "audio-retrieve": result } });
+      assert.deepEqual(await (await get("/api/songs/source")).json(), result);
+    }
+  });
+
+  it("keeps the generic tool route raw", async () => {
+    const { post } = harness({ toolResults: { "audio-retrieve": playable(first) } });
+    assert.deepEqual(await (await post("/api/tools/audio-retrieve/call", { id: first })).json(), playable(first));
+  });
+
+  it("links a preview once generating and waiting finishes", async () => {
+    const created = { id: first, clip_ids: [first, second], song_url: `https://suno.com/song/${first}` };
+    const { post } = harness({
+      toolResults: { "audio-create": created, "audio-wait": { clips: [playable(first), playable(second)] } }
+    });
+    const response = await post("/api/songs?wait=complete", { instrumental: true });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      created: { ...created, embed_url: `https://suno.com/embed/${first}` },
+      clips: [embedded(first), embedded(second)],
+      pending: [],
+      timed_out: false,
+      preview_url: `/preview?ids=${first},${second}`
+    });
+  });
+
+  it("includes only playable clips in a preview link", async () => {
+    const unread = { id: second, error: "audio not found", code: "not_found" };
+    const { post } = harness({ toolResults: { "audio-wait": { clips: [playable(first), unread] } } });
+    const body = await (await post("/api/songs/wait-all", { ids: [first, second] })).json() as { preview_url: string };
+    assert.equal(body.preview_url, `/preview?ids=${first}`);
+    const none = harness({ toolResults: { "audio-wait": { clips: [unread] } } });
+    const empty = await (await none.post("/api/songs/wait-all", { ids: [second] })).json() as object;
+    assert.equal(Object.hasOwn(empty, "preview_url"), false);
+  });
+
+  it("links a preview from the done event, using each clip's latest state", async () => {
+    const rounds = [{ id: first, status: "queued" }, playable(first, "streaming"), playable(first)];
+    let round = 0;
+    const { get } = harness({ toolResults: { "audio-wait": () => rounds[round++] } });
+    const text = await (await get(`/api/songs/events?ids=${first}&until=complete`)).text();
+    assert.ok(text.includes(`"embed_url":"https://suno.com/embed/${first}"`));
+    assert.equal(/^data: (.*)$/m.exec(text.trim().split("\n\n").at(-1) ?? "")?.[1], JSON.stringify({
+      pending: [], timed_out: false, preview_url: `/preview?ids=${first}`
+    }));
+  });
+
+  it("serves preview players without credentials or a Suno call", async () => {
+    const { app, calls, url } = harness();
+    const response = await app.request(url(`/preview?ids=${first},${second},${first}`));
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("Content-Type") ?? "", /text\/html/);
+    assert.match(response.headers.get("Content-Security-Policy") ?? "", /default-src 'none'; frame-src https:\/\/suno\.com;/);
+    assert.equal(response.headers.get("Referrer-Policy"), "no-referrer");
+    const html = await response.text();
+    assert.deepEqual(
+      [...html.matchAll(/<iframe src="([^"]+)"/g)].map((match) => match[1]),
+      [`https://suno.com/embed/${first}`, `https://suno.com/embed/${second}`]
+    );
+    assert.ok(!html.includes("test-secret"));
+    assert.equal(calls.length, 0);
+  });
+
+  it("rejects preview IDs that aren't UUIDs", async () => {
+    const { app, url, calls } = harness();
+    const invalid = [
+      "/preview",
+      "/preview?ids=",
+      "/preview?ids=not-a-uuid",
+      `/preview?ids=${first},`,
+      `/preview?ids=${encodeURIComponent('"><script>alert(1)</script>')}`,
+      `/preview?ids=${first}&extra=1`,
+      `/preview?ids=${Array.from({ length: 21 }, () => first).join(",")}`
+    ];
+    for (const path of invalid) {
+      const response = await app.request(url(path));
+      assert.equal(response.status, 400, path);
+      assert.ok(!(await response.text()).includes("<script>"), path);
+    }
+    assert.equal(calls.length, 0);
+  });
+});
+
 describe("generic tool protections", () => {
   it("requires an explicit allowlist entry for arbitrary tools", async () => {
     const { post, calls } = harness();
