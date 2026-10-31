@@ -81,17 +81,28 @@ export async function listSunoTools(): Promise<SunoTool[]> {
   return tools;
 }
 
+/**
+ * Decode a unique JSON payload from text-only MCP results. Preserve mixed-media
+ * content and any structured payload so audio, images and resources are not lost.
+ */
 export function simplifyToolResult(result: {
   isError?: boolean;
   structuredContent?: unknown;
   content?: Array<{ type: string; text?: string }>;
 }): JsonValue {
   const structured = result.structuredContent;
+  const content = result.content ?? [];
+  if (content.some((part) => part.type !== "text")) {
+    return {
+      ...(structured !== undefined ? { structuredContent: structured as JsonValue } : {}),
+      content
+    };
+  }
   if (structured !== undefined) return structured as JsonValue;
-  const textParts = result.content?.filter(
+  const textParts = content.filter(
     (part): part is { type: "text"; text: string } =>
       part.type === "text" && typeof part.text === "string"
-  ) ?? [];
+  );
   // Suno may append a second text block with guidance after its JSON payload.
   // Extract a single JSON payload without treating that guidance as response data.
   const payloads: JsonValue[] = [];
@@ -104,7 +115,7 @@ export function simplifyToolResult(result: {
   }
   if (payloads.length === 1) return payloads[0];
   if (textParts.length === 1) return { text: textParts[0].text };
-  return { content: result.content ?? [] };
+  return { content };
 }
 
 export async function callSunoTool(

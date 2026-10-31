@@ -127,12 +127,13 @@ export const uploadSessionSchema = z.object({
 }).strict();
 
 export const uploadCreateSchema = uploadSessionSchema.extend({
+  // Match the upstream attachment contract: strings plus optional provider metadata.
   file: z.object({
-    download_url: z.string().url(),
-    file_id: z.string().min(1),
+    download_url: z.string(),
+    file_id: z.string(),
     file_name: z.string().optional(),
     mime_type: z.string().optional()
-  }).strict().optional()
+  }).loose().optional()
 });
 
 const libraryFields = {
