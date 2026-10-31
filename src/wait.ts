@@ -26,7 +26,13 @@ export type ClipRound = {
 /** Read every clip ID a creation returned, as `clip_ids` or a single `id`. */
 export function clipIdsFrom(result: JsonValue): string[] {
   if (!isRecord(result)) return [];
-  const data = fields(result);
+  let data: Record<string, unknown>;
+  try {
+    data = fields(result);
+  } catch {
+    // The credits are already spent, so the caller must still get to return this result.
+    return [];
+  }
   if (Array.isArray(data.clip_ids)) {
     return data.clip_ids.filter((id): id is string => typeof id === "string" && id.length > 0);
   }
@@ -60,10 +66,11 @@ export async function* pollClips(
     for (let i = 0; i < pending.length; i += maxIdsPerCall) {
       batches.push(pending.slice(i, i + maxIdsPerCall));
     }
+    // Reading the result inside the batch makes a malformed one a failed round, like a failed call.
     const rounds = await Promise.allSettled(
-      batches.map((batch) => callTool("audio-wait", { ids: batch, until }))
+      batches.map(async (batch) => clipsFrom(await callTool("audio-wait", { ids: batch, until })))
     );
-    const clips = rounds.flatMap((round) => round.status === "fulfilled" ? clipsFrom(round.value) : []);
+    const clips = rounds.flatMap((round) => round.status === "fulfilled" ? round.value : []);
     const failed = rounds.find((round) => round.status === "rejected");
     const latest = new Map(clips.map((clip) => [clip.id, clip]));
     pending = pending.filter((id) => {
