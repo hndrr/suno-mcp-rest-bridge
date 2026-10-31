@@ -13,6 +13,12 @@ const upstreamSnapshot = JSON.parse(readFileSync(
 )) as { tools: Array<{ name: string; inputSchema: { properties: Record<string, unknown>; required?: string[] } }> };
 const upstreamSchemas = new Map(upstreamSnapshot.tools.map((tool) => [tool.name, tool.inputSchema]));
 
+// A result the MCP client accepts but the bridge can't read. The client rejects a non-object
+// structuredContent itself, so that shape never gets this far.
+const malformedResult: JsonValue = {
+  content: [{ type: "text", text: "[1,2]" }, { type: "audio", data: "AA==", mimeType: "audio/wav" }]
+};
+
 /** Build an isolated bridge whose mock calls are checked against the captured MCP contract. */
 function harness({
   uploadResult = { id: "session-123", upload_url: "https://storage.example.net/upload" } as JsonValue,
@@ -675,12 +681,11 @@ describe("generating and waiting in one request", () => {
   });
 
   it("keeps a malformed creation result instead of failing after spending credits", async () => {
-    const created = { structuredContent: null, content: [{ type: "audio" }] };
-    const { post, calls } = harness({ toolResults: { "audio-create": created } });
+    const { post, calls } = harness({ toolResults: { "audio-create": malformedResult } });
     const response = await post("/api/songs?wait=complete", { instrumental: true });
     assert.equal(response.status, 202);
     assert.deepEqual(await response.json(), {
-      created, clips: [], pending: [], timed_out: false,
+      created: malformedResult, clips: [], pending: [], timed_out: false,
       wait_error: { error: "Suno returned no clip IDs to wait for" }
     });
     assert.equal(calls.some((call) => call.name === "audio-wait"), false);
@@ -688,10 +693,7 @@ describe("generating and waiting in one request", () => {
 
   it("keeps the created IDs when a wait result is malformed", async () => {
     const { post, calls } = harness({
-      toolResults: {
-        "audio-create": { id: "a" },
-        "audio-wait": { structuredContent: null, content: [{ type: "audio" }] }
-      }
+      toolResults: { "audio-create": { id: "a" }, "audio-wait": malformedResult }
     });
     const response = await post("/api/songs?wait=complete", { instrumental: true });
     assert.equal(response.status, 202);
@@ -787,9 +789,7 @@ describe("waiting for many clips", () => {
   it("returns finished clips when another batch is malformed", async () => {
     const { post } = harness({
       toolResults: {
-        "audio-wait": (args) => (args.ids as string[]).includes("e")
-          ? { structuredContent: null, content: [{ type: "audio" }] }
-          : settle(args)
+        "audio-wait": (args) => (args.ids as string[]).includes("e") ? malformedResult : settle(args)
       }
     });
     const response = await post("/api/songs/wait-all", { ids: ["a", "b", "c", "d", "e"] });
@@ -801,9 +801,7 @@ describe("waiting for many clips", () => {
   });
 
   it("returns 502 when the only wait result is malformed", async () => {
-    const { post } = harness({
-      toolResults: { "audio-wait": { structuredContent: null, content: [{ type: "audio" }] } }
-    });
+    const { post } = harness({ toolResults: { "audio-wait": malformedResult } });
     const response = await post("/api/songs/wait-all", { ids: ["a"] });
     assert.equal(response.status, 502);
     assert.deepEqual(await response.json(), { error: "Unexpected response from Suno" });
@@ -851,9 +849,7 @@ describe("clip status events", () => {
   });
 
   it("reports a malformed wait result as a failed event", async () => {
-    const { get } = harness({
-      toolResults: { "audio-wait": { structuredContent: null, content: [{ type: "audio" }] } }
-    });
+    const { get } = harness({ toolResults: { "audio-wait": malformedResult } });
     assert.deepEqual(events(await (await get("/api/songs/events?ids=a")).text()), [{
       event: "failed",
       data: { error: "Unexpected response from Suno" }
