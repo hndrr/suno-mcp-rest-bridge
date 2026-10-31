@@ -1,0 +1,548 @@
+{
+  "endpoint": "https://api.suno.com/mcp",
+  "retrieved_at": "2026-10-31T03:38:24.467Z",
+  "tools": [
+    {
+      "name": "account-usage",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "audio-covers-create",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "controls": {
+            "properties": {
+              "audio_influence": {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              },
+              "style_influence": {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              },
+              "weirdness": {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "duration": {
+            "maximum": 360,
+            "minimum": 15,
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "lyrics": {
+            "maxLength": 5000,
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "negative_style": {
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "style": {
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "voice_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "audio-create",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "controls": {
+            "properties": {
+              "audio_influence": {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              },
+              "style_influence": {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              },
+              "weirdness": {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "description": {
+            "maxLength": 3000,
+            "type": "string"
+          },
+          "duration": {
+            "maximum": 360,
+            "minimum": 15,
+            "type": "integer"
+          },
+          "duration_guidance": {
+            "type": "boolean"
+          },
+          "duration_strict": {
+            "type": "boolean"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "instrumental": {
+            "default": false,
+            "type": "boolean"
+          },
+          "lyrics": {
+            "maxLength": 5000,
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "negative_style": {
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "style": {
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "vocal_gender": {
+            "enum": [
+              "male",
+              "female"
+            ],
+            "type": "string"
+          },
+          "voice_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "audio-extensions-create",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "continue_at": {
+            "minimum": 0.4,
+            "type": "number"
+          },
+          "controls": {
+            "properties": {
+              "audio_influence": {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              },
+              "style_influence": {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              },
+              "weirdness": {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "duration": {
+            "maximum": 360,
+            "minimum": 15,
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "instrumental": {
+            "type": "boolean"
+          },
+          "lyrics": {
+            "maxLength": 5000,
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "negative_style": {
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "style": {
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "voice_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "continue_at"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "audio-full-song",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "audio-mashups-create",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "additional_audio_id": {
+            "type": "string"
+          },
+          "controls": {
+            "properties": {
+              "audio_influence": {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              },
+              "style_influence": {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              },
+              "weirdness": {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "duration": {
+            "maximum": 360,
+            "minimum": 15,
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "lyrics": {
+            "maxLength": 5000,
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "negative_style": {
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "style": {
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "additional_audio_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "audio-retrieve",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "audio-upload-complete",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "audio-upload-create",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "properties": {
+              "download_url": {
+                "type": "string"
+              },
+              "file_id": {
+                "type": "string"
+              },
+              "file_name": {
+                "type": "string"
+              },
+              "mime_type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "download_url",
+              "file_id"
+            ],
+            "type": "object"
+          },
+          "title": {
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "audio-wait",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 4,
+            "type": "array"
+          },
+          "until": {
+            "default": "playable",
+            "enum": [
+              "playable",
+              "complete"
+            ],
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "library-liked",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "limit": {
+            "default": 10,
+            "maximum": 50,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "library-list",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "downloaded": {
+            "default": false,
+            "type": "boolean"
+          },
+          "liked": {
+            "default": false,
+            "type": "boolean"
+          },
+          "limit": {
+            "default": 10,
+            "maximum": 50,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "origin": {
+            "enum": [
+              "upload",
+              "cover",
+              "extension",
+              "remaster"
+            ],
+            "type": "string"
+          },
+          "visibility": {
+            "enum": [
+              "public",
+              "private"
+            ],
+            "type": "string"
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "library-search",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "downloaded": {
+            "default": false,
+            "type": "boolean"
+          },
+          "liked": {
+            "default": false,
+            "type": "boolean"
+          },
+          "limit": {
+            "default": 10,
+            "maximum": 50,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "origin": {
+            "enum": [
+              "upload",
+              "cover",
+              "extension",
+              "remaster"
+            ],
+            "type": "string"
+          },
+          "query": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "visibility": {
+            "enum": [
+              "public",
+              "private"
+            ],
+            "type": "string"
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  ]
+}

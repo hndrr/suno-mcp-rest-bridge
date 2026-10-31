@@ -3,7 +3,6 @@ import { z } from "zod";
 const boundedId = z.string().trim().min(1).max(255);
 const idempotencyKey = z.string().min(1).max(255).regex(/\S/, "Must contain a non-whitespace character");
 const duration = z.number().int().min(15).max(360);
-const clipCount = z.union([z.literal(1), z.literal(2)]).default(1);
 
 export const controlsSchema = z.object({
   audio_influence: z.number().min(0).max(1).optional(),
@@ -20,7 +19,6 @@ const createSongFields = {
   duration: duration.optional(),
   duration_guidance: z.boolean().optional(),
   duration_strict: z.boolean().optional(),
-  clip_count: clipCount,
   model: z.string().min(1).optional(),
   negative_style: z.string().min(1).max(1000).optional(),
   vocal_gender: z.enum(["male", "female"]).optional(),
@@ -84,7 +82,6 @@ export const createSongSchema = z.object(createSongFields).strict().superRefine(
 export const createSampleSchema = z.object({
   ...createSongFields,
   duration: z.number().int().min(15).max(60).default(15),
-  clip_count: z.literal(1).default(1),
   duration_guidance: z.boolean().default(true),
   duration_strict: z.boolean().default(true)
 }).strict().superRefine((song, ctx) => {
@@ -92,7 +89,6 @@ export const createSampleSchema = z.object({
 });
 
 const remixFields = {
-  clip_count: clipCount,
   controls: controlsSchema.optional(),
   duration: duration.optional(),
   idempotency_key: idempotencyKey.optional(),
@@ -130,6 +126,16 @@ export const uploadSessionSchema = z.object({
   title: z.string().trim().min(1).max(256).optional()
 }).strict();
 
+export const uploadCreateSchema = uploadSessionSchema.extend({
+  // Match the upstream attachment contract: strings plus optional provider metadata.
+  file: z.object({
+    download_url: z.string(),
+    file_id: z.string(),
+    file_name: z.string().optional(),
+    mime_type: z.string().optional()
+  }).loose().optional()
+});
+
 const libraryFields = {
   cursor: z.string().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(50).optional(),
@@ -153,6 +159,14 @@ export const likedQuerySchema = z.object({
 export const waitQuerySchema = z.object({
   until: z.enum(["playable", "complete"]).default("playable")
 }).strict();
+
+export const waitBodySchema = waitQuerySchema.extend({
+  id: boundedId.optional(),
+  ids: z.array(boundedId).min(1).max(4).transform((ids) => [...new Set(ids)]).optional()
+}).refine((body) => (body.id !== undefined) !== (body.ids !== undefined), {
+  message: "Provide exactly one of id or ids",
+  path: ["ids"]
+});
 
 export type CreateSongInput = z.infer<typeof createSongSchema>;
 export type CreateSampleInput = z.infer<typeof createSampleSchema>;

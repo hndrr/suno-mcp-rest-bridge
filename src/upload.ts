@@ -24,11 +24,26 @@ function str(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-/** The MCP tool may return its JSON at the top level or in a `data` object. */
+/** Read upload fields from direct JSON, data wrappers or preserved mixed-media MCP results. */
 function fields(result: JsonValue): Record<string, unknown> {
   if (!isRecord(result)) throw new BridgeError(502, "Unexpected upload session response from Suno");
-  if (isRecord(result.data)) return result.data;
-  return result;
+  let payload: unknown = result.structuredContent;
+  if (payload === undefined && Array.isArray(result.content)) {
+    const candidates: unknown[] = [];
+    for (const part of result.content) {
+      if (!isRecord(part) || part.type !== "text" || typeof part.text !== "string") continue;
+      try {
+        candidates.push(JSON.parse(part.text));
+      } catch {
+        // Supplementary text is not upload metadata.
+      }
+    }
+    if (candidates.length === 1) payload = candidates[0];
+  }
+  if (payload === undefined) payload = result;
+  if (!isRecord(payload)) throw new BridgeError(502, "Unexpected upload session response from Suno");
+  if (isRecord(payload.data)) return payload.data;
+  return payload;
 }
 
 export function getUploadSession(result: JsonValue): {
