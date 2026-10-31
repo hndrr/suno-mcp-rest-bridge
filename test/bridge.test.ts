@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { after, describe, it } from "node:test";
 import { createApp, type BridgeDependencies } from "../src/app.js";
 import { BridgeError, getUploadSession, putSignedUpload } from "../src/upload.js";
-import { simplifyToolResult, type JsonValue } from "../src/suno.js";
+import { simplifyToolResult, SunoToolError, type JsonValue } from "../src/suno.js";
 
 type Call = { name: string; args: Record<string, unknown> };
 
@@ -359,6 +359,64 @@ describe("reference audio uploads", () => {
 
   it("rejects an unsafe upload URL before sending any bytes", async () => {
     await assert.rejects(() => putSignedUpload("http://127.0.0.1/test", new Uint8Array(1)), BridgeError);
+  });
+});
+
+describe("upstream error statuses", () => {
+  const request = (callTool: BridgeDependencies["callTool"]) => createApp({
+    apiKey: "test-secret",
+    tools: { callTool, listTools: async () => [] }
+  }).request("http://localhost/api/usage", { headers: { Authorization: "Bearer test-secret" } });
+  const failWith = (details: JsonValue) => request(async () => { throw new SunoToolError(details); });
+
+  it("maps Suno error codes to HTTP statuses and keeps the upstream details", async () => {
+    const statuses: Array<[string, number]> = [
+      ["invalid_request", 400],
+      ["insufficient_credits", 402],
+      ["forbidden", 403],
+      ["feature_not_on_plan", 403],
+      ["not_found", 404],
+      ["rate_limited", 429],
+      ["quota_exceeded", 429]
+    ];
+    for (const [code, status] of statuses) {
+      const details = { error: "refused", code, reason: "detail" };
+      const response = await failWith(details);
+      assert.equal(response.status, status, code);
+      assert.deepEqual(await response.json(), { error: "Suno MCP tool failed", details });
+    }
+  });
+
+  it("reads the code from a real MCP error result", async () => {
+    // Captured from the official MCP server for an unknown clip ID.
+    const details = simplifyToolResult({
+      isError: true,
+      content: [{ type: "text", text: '{"error":"audio not found","code":"not_found"}' }]
+    });
+    assert.equal((await failWith(details)).status, 404);
+  });
+
+  it("keeps 502 and the details for unknown or missing codes", async () => {
+    const unmapped: JsonValue[] = [
+      { error: "refused", code: "something_new" },
+      { error: "refused", code: "constructor" },
+      { error: "refused", code: 404 },
+      { error: "refused" },
+      { text: "Not JSON" },
+      null
+    ];
+    for (const details of unmapped) {
+      const response = await failWith(details);
+      assert.equal(response.status, 502);
+      assert.deepEqual(await response.json(), { error: "Suno MCP tool failed", details });
+    }
+  });
+
+  it("keeps a generic 502 for connection failures", async (t) => {
+    t.mock.method(console, "error", () => {});
+    const response = await request(async () => { throw new Error("transport closed"); });
+    assert.equal(response.status, 502);
+    assert.deepEqual(await response.json(), { error: "Suno MCP connection or internal operation failed" });
   });
 });
 

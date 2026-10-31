@@ -37,6 +37,22 @@ export type BridgeOptions = {
   allowedTools?: string[];
 };
 
+// Suno MCP errors carry a string `code` but no HTTP status.
+const upstreamStatuses = new Map<string, 400 | 402 | 403 | 404 | 429>([
+  ["invalid_request", 400],
+  ["insufficient_credits", 402],
+  ["forbidden", 403],
+  ["feature_not_on_plan", 403],
+  ["not_found", 404],
+  ["rate_limited", 429],
+  ["quota_exceeded", 429]
+]);
+
+function upstreamStatus(details: unknown): 400 | 402 | 403 | 404 | 429 | 502 {
+  if (details === null || typeof details !== "object" || !("code" in details)) return 502;
+  return typeof details.code === "string" ? upstreamStatuses.get(details.code) ?? 502 : 502;
+}
+
 function normalizedToolName(name: string): string {
   return name.toLowerCase().replace(/[-_]/g, "");
 }
@@ -245,7 +261,7 @@ export function createApp({
     // Upstream MCP error includes details, while transport errors get a generic 502.
     if (error instanceof Error && error.name === "SunoToolError") {
       const details = "details" in error ? error.details : undefined;
-      return c.json({ error: "Suno MCP tool failed", details }, 502);
+      return c.json({ error: "Suno MCP tool failed", details }, upstreamStatus(details));
     }
     console.error("Suno bridge request failed", error);
     return c.json({ error: "Suno MCP connection or internal operation failed" }, 502);
