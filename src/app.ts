@@ -11,7 +11,9 @@ import {
   fullSongSchema,
   libraryQuerySchema,
   likedQuerySchema,
+  uploadCreateSchema,
   uploadSessionSchema,
+  waitBodySchema,
   waitQuerySchema
 } from "./schemas.js";
 import {
@@ -134,6 +136,9 @@ export function createApp({
   app.post("/api/samples", async (c) =>
     c.json(await tools.callTool("audio-create", parse(createSampleSchema, await jsonBody(c))), 202)
   );
+  app.post("/api/songs/wait", async (c) =>
+    c.json(await tools.callTool("audio-wait", parse(waitBodySchema, await jsonBody(c))))
+  );
   app.get("/api/songs/:id", async (c) =>
     c.json(await tools.callTool("audio-retrieve", { id: validId(c.req.param("id")) }))
   );
@@ -144,10 +149,11 @@ export function createApp({
     }))
   );
 
-  // Creating a session is free; returns a one-hour signed upload URL.
-  app.post("/api/uploads/sessions", async (c) =>
-    c.json(await tools.callTool("audio-upload-create", parse(uploadSessionSchema, await jsonBody(c, true))), 201)
-  );
+  // Without a file this returns signed URLs; an attached file starts processing immediately.
+  app.post("/api/uploads/sessions", async (c) => {
+    const args = parse(uploadCreateSchema, await jsonBody(c, true));
+    return c.json(await tools.callTool("audio-upload-create", args), args.file ? 202 : 201);
+  });
   app.post("/api/uploads/:id/complete", async (c) =>
     c.json(await tools.callTool("audio-upload-complete", {
       id: validId(c.req.param("id")),
