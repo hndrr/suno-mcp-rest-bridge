@@ -18,11 +18,20 @@ const allowedTools = (process.env.ALLOWED_TOOLS ?? "account-usage,audio-retrieve
   .split(",")
   .map((value) => value.trim())
   .filter(Boolean);
+const minCreditsRemaining = process.env.MIN_CREDITS_REMAINING?.trim()
+  ? Number(process.env.MIN_CREDITS_REMAINING)
+  : undefined;
+if (minCreditsRemaining !== undefined &&
+    (!Number.isSafeInteger(minCreditsRemaining) || minCreditsRemaining < 0)) {
+  throw new Error("MIN_CREDITS_REMAINING must be a non-negative integer");
+}
 
 const app = createApp({
   apiKey,
   maxUploadBytes: maxUploadMb * 1024 * 1024,
   allowedTools,
+  minCreditsRemaining,
+  requireIdempotencyKey: process.env.REQUIRE_IDEMPOTENCY_KEY === "true",
   tools: {
     callTool: callSunoTool,
     listTools: listSunoTools

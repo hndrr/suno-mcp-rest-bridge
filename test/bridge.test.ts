@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { after, describe, it } from "node:test";
-import { createApp, type BridgeDependencies } from "../src/app.js";
+import { createApp, type BridgeDependencies, type BridgeOptions } from "../src/app.js";
 import { BridgeError, getUploadSession, putSignedUpload } from "../src/upload.js";
-import { simplifyToolResult, type JsonValue } from "../src/suno.js";
+import { simplifyToolResult, SunoToolError, type JsonValue } from "../src/suno.js";
 
 type Call = { name: string; args: Record<string, unknown> };
 
@@ -13,12 +13,24 @@ const upstreamSnapshot = JSON.parse(readFileSync(
 )) as { tools: Array<{ name: string; inputSchema: { properties: Record<string, unknown>; required?: string[] } }> };
 const upstreamSchemas = new Map(upstreamSnapshot.tools.map((tool) => [tool.name, tool.inputSchema]));
 
+// A result the MCP client accepts but the bridge can't read. The client rejects a non-object
+// structuredContent itself, so that shape never gets this far.
+const malformedResult: JsonValue = {
+  content: [{ type: "text", text: "[1,2]" }, { type: "audio", data: "AA==", mimeType: "audio/wav" }]
+};
+
 /** Build an isolated bridge whose mock calls are checked against the captured MCP contract. */
 function harness({
   uploadResult = { id: "session-123", upload_url: "https://storage.example.net/upload" } as JsonValue,
   maxUploadBytes = 1024 * 1024,
-  toolResults = {}
-}: { uploadResult?: JsonValue; maxUploadBytes?: number; toolResults?: Record<string, JsonValue> } = {}) {
+  toolResults = {},
+  options = {}
+}: {
+  uploadResult?: JsonValue;
+  maxUploadBytes?: number;
+  toolResults?: Record<string, JsonValue | ((args: Record<string, unknown>) => JsonValue)>;
+  options?: Partial<BridgeOptions>;
+} = {}) {
   const calls: Call[] = [];
   const uploaded: { url: string; bytes: Uint8Array }[] = [];
   const contractViolations: string[] = [];
@@ -37,7 +49,10 @@ function harness({
         }
       }
       calls.push({ name, args });
-      if (Object.hasOwn(toolResults, name)) return toolResults[name];
+      if (Object.hasOwn(toolResults, name)) {
+        const result = toolResults[name];
+        return typeof result === "function" ? result(args) : result;
+      }
       if (name === "audio-upload-create") return uploadResult;
       if (name === "audio-upload-complete") return { id: "source-clip", status: "processing" };
       return { ok: true, name, args };
@@ -45,7 +60,7 @@ function harness({
     listTools: async () => [],
     putUpload: async (url, bytes) => { uploaded.push({ url, bytes }); }
   };
-  const app = createApp({ apiKey: "test-secret", tools, maxUploadBytes });
+  const app = createApp({ apiKey: "test-secret", tools, maxUploadBytes, waitPollMs: 1, ...options });
   const url = (path: string) => `http://localhost${path}`;
   const auth = { Authorization: "Bearer test-secret" };
   const post = async (path: string, body: unknown): Promise<Response> =>
@@ -55,8 +70,19 @@ function harness({
       body: JSON.stringify(body)
     });
   const get = async (path: string): Promise<Response> => app.request(url(path), { headers: auth });
-  return { app, calls, uploaded, post, get, auth, url };
+  const send = async (method: string, path: string, body?: unknown): Promise<Response> =>
+    app.request(url(path), {
+      method,
+      headers: { ...auth, "Content-Type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) })
+    });
+  return { app, calls, uploaded, post, get, send, auth, url };
 }
+
+const usage = {
+  allowed_models: ["v6-mini", "v6", "v6-wild"],
+  suno_account: { credits_remaining: 100 }
+};
 
 describe("authentication and generated samples", () => {
   it("serves API discovery at the root without credentials or a Suno connection", async () => {
@@ -359,6 +385,606 @@ describe("reference audio uploads", () => {
 
   it("rejects an unsafe upload URL before sending any bytes", async () => {
     await assert.rejects(() => putSignedUpload("http://127.0.0.1/test", new Uint8Array(1)), BridgeError);
+  });
+});
+
+describe("upstream error statuses", () => {
+  const request = (callTool: BridgeDependencies["callTool"]) => createApp({
+    apiKey: "test-secret",
+    tools: { callTool, listTools: async () => [] }
+  }).request("http://localhost/api/usage", { headers: { Authorization: "Bearer test-secret" } });
+  const failWith = (details: JsonValue) => request(async () => { throw new SunoToolError(details); });
+
+  it("maps Suno error codes to HTTP statuses and keeps the upstream details", async () => {
+    const statuses: Array<[string, number]> = [
+      ["invalid_request", 400],
+      ["insufficient_credits", 402],
+      ["forbidden", 403],
+      ["feature_not_on_plan", 403],
+      ["not_found", 404],
+      ["rate_limited", 429],
+      ["quota_exceeded", 429]
+    ];
+    for (const [code, status] of statuses) {
+      const details = { error: "refused", code, reason: "detail" };
+      const response = await failWith(details);
+      assert.equal(response.status, status, code);
+      assert.deepEqual(await response.json(), { error: "Suno MCP tool failed", details });
+    }
+  });
+
+  it("reads the code from a real MCP error result", async () => {
+    // Captured from the official MCP server for an unknown clip ID.
+    const details = simplifyToolResult({
+      isError: true,
+      content: [{ type: "text", text: '{"error":"audio not found","code":"not_found"}' }]
+    });
+    assert.equal((await failWith(details)).status, 404);
+  });
+
+  it("keeps 502 and the details for unknown or missing codes", async () => {
+    const unmapped: JsonValue[] = [
+      { error: "refused", code: "something_new" },
+      { error: "refused", code: "constructor" },
+      { error: "refused", code: 404 },
+      { error: "refused" },
+      { text: "Not JSON" },
+      null
+    ];
+    for (const details of unmapped) {
+      const response = await failWith(details);
+      assert.equal(response.status, 502);
+      assert.deepEqual(await response.json(), { error: "Suno MCP tool failed", details });
+    }
+  });
+
+  it("keeps a generic 502 for connection failures", async (t) => {
+    t.mock.method(console, "error", () => {});
+    const response = await request(async () => { throw new Error("transport closed"); });
+    assert.equal(response.status, 502);
+    assert.deepEqual(await response.json(), { error: "Suno MCP connection or internal operation failed" });
+  });
+});
+
+describe("account, library and voice tools", () => {
+  it("maps each route to its tool and arguments", async () => {
+    const cases: Array<[string, string, unknown, string, Record<string, unknown>, number]> = [
+      ["GET", "/api/account", undefined, "account-me", {}, 200],
+      ["GET", "/api/account/upgrade", undefined, "account-upgrade", {}, 200],
+      ["GET", "/api/songs/a/analysis", undefined, "audio-analysis", { id: "a" }, 200],
+      ["GET", "/api/songs/a/lyrics-alignment", undefined, "audio-lyrics-alignment", { id: "a" }, 200],
+      ["POST", "/api/songs/a/download", undefined, "audio-download", { id: "a" }, 200],
+      ["POST", "/api/songs/a/download", { format: "wav", confirm: true }, "audio-download", { id: "a", format: "wav", confirm: true }, 200],
+      ["PATCH", "/api/songs/a", { title: "New" }, "audio-edit", { id: "a", title: "New" }, 200],
+      ["POST", "/api/songs/a/like", undefined, "audio-like", { id: "a" }, 200],
+      ["DELETE", "/api/songs/a/like", undefined, "audio-unlike", { id: "a" }, 200],
+      ["POST", "/api/speech", { script: "Hello" }, "speech-create", { script: "Hello" }, 202],
+      ["GET", "/api/voices?collection=loved&limit=100&query=warm", undefined, "voices-list", { collection: "loved", limit: 100, query: "warm" }, 200],
+      ["POST", "/api/voices/start", undefined, "voices-start", {}, 200],
+      ["GET", "/api/playlists?limit=5&query=mix", undefined, "playlists-list", { limit: 5, query: "mix" }, 200],
+      ["POST", "/api/playlists", { name: "Mix", visibility: "public" }, "playlists-create", { name: "Mix", visibility: "public" }, 201],
+      ["GET", "/api/playlists/p/songs?limit=5", undefined, "playlists-list-clips", { id: "p", limit: 5 }, 200],
+      ["POST", "/api/playlists/p/songs", { clip_ids: ["a"] }, "playlists-add-clips", { id: "p", clip_ids: ["a"] }, 200],
+      ["DELETE", "/api/playlists/p/songs", { clip_ids: ["a"] }, "playlists-remove-clips", { id: "p", clip_ids: ["a"] }, 200],
+      ["GET", "/api/workspaces?query=demo", undefined, "workspaces-list", { query: "demo" }, 200],
+      ["POST", "/api/workspaces", { name: "Demo" }, "workspaces-create", { name: "Demo" }, 201],
+      ["PATCH", "/api/workspaces/w/songs", { add: ["a"], remove: ["b"] }, "workspaces-update-clips", { id: "w", add: ["a"], remove: ["b"] }, 200]
+    ];
+    const { send, calls } = harness();
+    for (const [method, path, body, name, args, status] of cases) {
+      assert.equal((await send(method, path, body)).status, status, `${method} ${path}`);
+      assert.deepEqual(calls.at(-1), { name, args }, `${method} ${path}`);
+    }
+  });
+
+  it("never confirms a download credit unless the client does", async () => {
+    const answer = { status: "requires_credit" };
+    const { post, calls } = harness({ toolResults: { "audio-download": answer } });
+    const response = await post("/api/songs/a/download", { format: "mp3" });
+    assert.deepEqual(await response.json(), answer);
+    assert.deepEqual(calls, [{ name: "audio-download", args: { id: "a", format: "mp3" } }]);
+    assert.equal((await post("/api/songs/a/download", { confirm: "true" })).status, 400);
+  });
+
+  it("rejects invalid requests before calling Suno", async () => {
+    const { send, calls } = harness();
+    const invalid: Array<[string, string, unknown]> = [
+      ["POST", "/api/speech", {}],
+      ["POST", "/api/speech", { script: "a", prompt: "b" }],
+      ["POST", "/api/speech", { prompt: "a", style: "calm" }],
+      ["POST", "/api/speech", { prompt: "a", negative_style: "loud" }],
+      ["POST", "/api/speech", { prompt: "a".repeat(2888), backing_music: true }],
+      ["POST", "/api/speech", { script: "a", duration_strict: true }],
+      ["POST", "/api/speech", { script: "a", model: "v6" }],
+      ["PATCH", "/api/songs/a", {}],
+      ["POST", "/api/songs/a/download", { format: "flac" }],
+      ["GET", "/api/voices?limit=101", undefined],
+      ["GET", "/api/playlists?limit=51", undefined],
+      ["POST", "/api/playlists", {}],
+      ["POST", "/api/playlists/p/songs", { clip_ids: [] }],
+      ["DELETE", "/api/playlists/p/songs", { clip_ids: Array(101).fill("a") }],
+      ["POST", "/api/workspaces", { name: "a".repeat(101) }],
+      ["PATCH", "/api/workspaces/w/songs", {}],
+      ["PATCH", "/api/workspaces/w/songs", { add: [], remove: [] }],
+      ["PATCH", "/api/workspaces/w/songs", { add: Array(51).fill("a") }]
+    ];
+    for (const [method, path, body] of invalid) {
+      assert.equal((await send(method, path, body)).status, 400, `${method} ${path} ${JSON.stringify(body)?.slice(0, 40)}`);
+    }
+    assert.equal(calls.length, 0);
+  });
+});
+
+describe("model and credit guards", () => {
+  const generationRoutes: Array<[string, Record<string, unknown>]> = [
+    ["/api/songs", { instrumental: true }],
+    ["/api/samples", { instrumental: true }],
+    ["/api/songs/source/cover", {}],
+    ["/api/songs/source/mashup", { additional_audio_id: "second" }],
+    ["/api/songs/source/extend", { continue_at: 1 }]
+  ];
+  const created = (calls: Call[]) => calls.filter((call) => call.name !== "account-usage");
+
+  it("lists the models this account may use", async () => {
+    const { get } = harness({ toolResults: { "account-usage": usage } });
+    assert.deepEqual(await (await get("/api/models")).json(), { allowed_models: usage.allowed_models });
+    const missing = harness({ toolResults: { "account-usage": {} } });
+    assert.deepEqual(await (await missing.get("/api/models")).json(), { allowed_models: [] });
+  });
+
+  it("rejects a model the account doesn't hold before spending credits", async () => {
+    for (const [path, body] of generationRoutes) {
+      const { post, calls } = harness({ toolResults: { "account-usage": usage } });
+      const response = await post(path, { ...body, model: "v5" });
+      assert.equal(response.status, 400, path);
+      const error = await response.json() as { issues: Array<{ path: string; message: string }> };
+      assert.equal(error.issues[0]?.path, "model");
+      assert.match(error.issues[0]?.message ?? "", /v6-mini, v6, v6-wild/);
+      assert.deepEqual(created(calls), []);
+    }
+  });
+
+  it("forwards an allowed model, and leaves the choice to Suno when the list is absent", async () => {
+    const allowed = harness({ toolResults: { "account-usage": usage } });
+    assert.equal((await allowed.post("/api/songs", { instrumental: true, model: "v6-wild" })).status, 202);
+    assert.equal(allowed.calls.at(-1)?.args.model, "v6-wild");
+    const unknown = harness({ toolResults: { "account-usage": {} } });
+    assert.equal((await unknown.post("/api/songs", { instrumental: true, model: "v7" })).status, 202);
+    assert.equal(unknown.calls.at(-1)?.args.model, "v7");
+  });
+
+  it("skips the account lookup when no guard needs it", async () => {
+    const { post, calls } = harness();
+    assert.equal((await post("/api/songs", { instrumental: true })).status, 202);
+    assert.deepEqual(calls.map((call) => call.name), ["audio-create"]);
+  });
+
+  it("refuses generation below MIN_CREDITS_REMAINING", async () => {
+    const low = harness({ toolResults: { "account-usage": usage }, options: { minCreditsRemaining: 101 } });
+    for (const [path, body] of [...generationRoutes, ["/api/speech", { script: "Hello" }] as [string, Record<string, unknown>]]) {
+      assert.equal((await low.post(path, body)).status, 402, path);
+    }
+    assert.deepEqual(created(low.calls), []);
+    const enough = harness({ toolResults: { "account-usage": usage }, options: { minCreditsRemaining: 100 } });
+    assert.equal((await enough.post("/api/songs", { instrumental: true })).status, 202);
+    assert.equal(enough.calls.at(-1)?.name, "audio-create");
+  });
+
+  it("refuses generation when the credit balance can't be read", async () => {
+    const { post, calls } = harness({ toolResults: { "account-usage": {} }, options: { minCreditsRemaining: 1 } });
+    assert.equal((await post("/api/songs", { instrumental: true })).status, 502);
+    assert.deepEqual(created(calls), []);
+  });
+
+  it("leaves joining and reads outside the credit guard", async () => {
+    const { post, get } = harness({ toolResults: { "account-usage": usage }, options: { minCreditsRemaining: 101 } });
+    assert.equal((await post("/api/songs/a/full-song", {})).status, 202);
+    assert.equal((await get("/api/songs/a")).status, 200);
+  });
+
+  it("requires idempotency_key on generation when configured", async () => {
+    const { post, calls } = harness({ options: { requireIdempotencyKey: true } });
+    for (const [path, body] of generationRoutes) {
+      const response = await post(path, body);
+      assert.equal(response.status, 400, path);
+      const error = await response.json() as { issues: Array<{ path: string }> };
+      assert.equal(error.issues[0]?.path, "idempotency_key");
+    }
+    assert.equal((await post("/api/speech", { script: "Hello" })).status, 400);
+    assert.equal(calls.length, 0);
+    assert.equal((await post("/api/songs", { instrumental: true, idempotency_key: "one" })).status, 202);
+    assert.equal(calls.at(-1)?.args.idempotency_key, "one");
+  });
+});
+
+describe("generating and waiting in one request", () => {
+  const clip = (id: string, status: string) => ({ id, status });
+
+  it("waits for every created clip and returns both results", async () => {
+    let round = 0;
+    const { post, calls } = harness({
+      toolResults: {
+        "audio-create": { id: "a", clip_ids: ["a", "b"], status: "submitted" },
+        "audio-wait": () => ++round === 1
+          ? { clips: [clip("a", "complete"), clip("b", "queued")] }
+          : { clips: [clip("b", "complete")] }
+      }
+    });
+    const response = await post("/api/songs?wait=complete", { instrumental: true });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      created: { id: "a", clip_ids: ["a", "b"], status: "submitted" },
+      clips: [clip("a", "complete"), clip("b", "complete")],
+      pending: [],
+      timed_out: false
+    });
+    assert.deepEqual(calls.filter((call) => call.name === "audio-wait").map((call) => call.args), [
+      { ids: ["a", "b"], until: "complete" },
+      { ids: ["b"], until: "complete" }
+    ]);
+  });
+
+  it("supports the same wait on remix and speech routes", async () => {
+    const requests: Array<[string, Record<string, unknown>]> = [
+      ["/api/samples", { instrumental: true }],
+      ["/api/songs/source/cover", {}],
+      ["/api/songs/source/mashup", { additional_audio_id: "second" }],
+      ["/api/songs/source/extend", { continue_at: 1 }],
+      ["/api/speech", { script: "Hello" }]
+    ];
+    for (const [path, body] of requests) {
+      const { post } = harness({
+        toolResults: {
+          "audio-create": { id: "a" }, "audio-covers-create": { id: "a" }, "audio-mashups-create": { id: "a" },
+          "audio-extensions-create": { id: "a" }, "speech-create": { id: "a" }, "audio-wait": clip("a", "streaming")
+        }
+      });
+      const response = await post(`${path}?wait=playable`, body);
+      assert.equal(response.status, 200, path);
+      assert.deepEqual((await response.json() as { clips: unknown }).clips, [clip("a", "streaming")]);
+    }
+  });
+
+  it("keeps the created IDs when the wait times out", async () => {
+    const { post } = harness({
+      toolResults: { "audio-create": { id: "a" }, "audio-wait": clip("a", "queued") },
+      options: { waitPollMs: 100 }
+    });
+    const response = await post("/api/songs?wait=complete&timeout=1", { instrumental: true });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), {
+      created: { id: "a" }, clips: [clip("a", "queued")], pending: ["a"], timed_out: true
+    });
+  });
+
+  it("keeps the created IDs when waiting fails", async () => {
+    const { post } = harness({
+      toolResults: {
+        "audio-create": { id: "a" },
+        "audio-wait": () => { throw new SunoToolError({ error: "slow down", code: "rate_limited" }); }
+      }
+    });
+    const response = await post("/api/songs?wait=complete", { instrumental: true });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), {
+      created: { id: "a" }, clips: [], pending: ["a"], timed_out: false,
+      wait_error: { error: "Suno MCP tool failed", details: { error: "slow down", code: "rate_limited" } }
+    });
+  });
+
+  it("reports a creation with no clip IDs instead of waiting", async () => {
+    const { post, calls } = harness({ toolResults: { "audio-create": { status: "submitted" } } });
+    const response = await post("/api/songs?wait=complete", { instrumental: true });
+    assert.equal(response.status, 202);
+    assert.deepEqual((await response.json() as { created: unknown }).created, { status: "submitted" });
+    assert.equal(calls.some((call) => call.name === "audio-wait"), false);
+  });
+
+  it("keeps a malformed creation result instead of failing after spending credits", async () => {
+    const { post, calls } = harness({ toolResults: { "audio-create": malformedResult } });
+    const response = await post("/api/songs?wait=complete", { instrumental: true });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), {
+      created: malformedResult, clips: [], pending: [], timed_out: false,
+      wait_error: { error: "Suno returned no clip IDs to wait for" }
+    });
+    assert.equal(calls.some((call) => call.name === "audio-wait"), false);
+  });
+
+  it("keeps the created IDs when a wait result is malformed", async () => {
+    const { post, calls } = harness({
+      toolResults: { "audio-create": { id: "a" }, "audio-wait": malformedResult }
+    });
+    const response = await post("/api/songs?wait=complete", { instrumental: true });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), {
+      created: { id: "a" }, clips: [], pending: ["a"], timed_out: false,
+      wait_error: { error: "Unexpected response from Suno" }
+    });
+    assert.equal(calls.filter((call) => call.name === "audio-wait").length, 1);
+  });
+
+  it("rejects an invalid wait query before spending credits", async () => {
+    const { post, calls } = harness();
+    for (const query of ["wait=done", "timeout=10", "wait=complete&timeout=0", "wait=complete&timeout=601", "wiat=complete"]) {
+      assert.equal((await post(`/api/songs?${query}`, { instrumental: true })).status, 400, query);
+    }
+    assert.equal(calls.length, 0);
+  });
+});
+
+describe("waiting for many clips", () => {
+  const clip = (id: string, status: string) => ({ id, status });
+  const settle = (args: Record<string, unknown>) => ({
+    clips: (args.ids as string[]).map((id) => clip(id, "complete"))
+  });
+
+  it("splits the IDs into batches of four and deduplicates them", async () => {
+    const { post, calls } = harness({ toolResults: { "audio-wait": settle } });
+    const ids = ["a", "b", "c", "d", "e", "f", "a"];
+    const response = await post("/api/songs/wait-all", { ids, until: "complete" });
+    assert.equal(response.status, 200);
+    assert.deepEqual(calls.map((call) => call.args), [
+      { ids: ["a", "b", "c", "d"], until: "complete" },
+      { ids: ["e", "f"], until: "complete" }
+    ]);
+    const body = await response.json() as { clips: Array<{ id: string }>; pending: string[]; timed_out: boolean };
+    assert.deepEqual(body.clips.map((item) => item.id).sort(), ["a", "b", "c", "d", "e", "f"]);
+    assert.deepEqual(body.pending, []);
+    assert.equal(body.timed_out, false);
+  });
+
+  it("settles on Suno's real shape for a clip it can't read", async () => {
+    const unread = { id: "missing", error: "audio not found", code: "not_found" };
+    const { post, calls } = harness({
+      toolResults: { "audio-wait": { id: "a", status: "complete", error: null, clips: [{ id: "a", status: "complete", error: null }, unread] } }
+    });
+    const response = await post("/api/songs/wait-all", { ids: ["a", "missing"] });
+    assert.equal(response.status, 200);
+    assert.deepEqual((await response.json() as { clips: unknown[] }).clips[1], unread);
+    assert.equal(calls.length, 1);
+  });
+
+  it("stops at streaming for playable and keeps polling for complete", async () => {
+    const playable = harness({ toolResults: { "audio-wait": clip("a", "streaming") } });
+    assert.equal((await playable.post("/api/songs/wait-all", { ids: ["a"] })).status, 200);
+    assert.equal(playable.calls.length, 1);
+    const complete = harness({
+      toolResults: { "audio-wait": clip("a", "streaming") }, options: { waitPollMs: 100 }
+    });
+    const response = await complete.post("/api/songs/wait-all", { ids: ["a"], until: "complete", timeout: 1 });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), { clips: [clip("a", "streaming")], pending: ["a"], timed_out: true });
+  });
+
+  it("treats a failed generation as settled", async () => {
+    const { post } = harness({ toolResults: { "audio-wait": clip("a", "error") } });
+    assert.equal((await post("/api/songs/wait-all", { ids: ["a"], until: "complete" })).status, 200);
+  });
+
+  it("returns the upstream status when nothing could be read", async () => {
+    const { post } = harness({
+      toolResults: { "audio-wait": () => { throw new SunoToolError({ error: "gone", code: "not_found" }); } }
+    });
+    assert.equal((await post("/api/songs/wait-all", { ids: ["a"] })).status, 404);
+  });
+
+  it("returns finished clips when another batch fails", async () => {
+    const { post } = harness({
+      toolResults: {
+        "audio-wait": (args) => {
+          if ((args.ids as string[]).includes("e")) throw new SunoToolError({ error: "slow down", code: "rate_limited" });
+          return settle(args);
+        }
+      }
+    });
+    const response = await post("/api/songs/wait-all", { ids: ["a", "b", "c", "d", "e"] });
+    assert.equal(response.status, 202);
+    const body = await response.json() as { clips: unknown[]; pending: string[]; wait_error: { details: { code: string } } };
+    assert.equal(body.clips.length, 4);
+    assert.deepEqual(body.pending, ["e"]);
+    assert.equal(body.wait_error.details.code, "rate_limited");
+  });
+
+  it("returns finished clips when another batch is malformed", async () => {
+    const { post } = harness({
+      toolResults: {
+        "audio-wait": (args) => (args.ids as string[]).includes("e") ? malformedResult : settle(args)
+      }
+    });
+    const response = await post("/api/songs/wait-all", { ids: ["a", "b", "c", "d", "e"] });
+    assert.equal(response.status, 202);
+    const body = await response.json() as { clips: unknown[]; pending: string[]; wait_error: unknown };
+    assert.equal(body.clips.length, 4);
+    assert.deepEqual(body.pending, ["e"]);
+    assert.deepEqual(body.wait_error, { error: "Unexpected response from Suno" });
+  });
+
+  it("returns 502 when the only wait result is malformed", async () => {
+    const { post } = harness({ toolResults: { "audio-wait": malformedResult } });
+    const response = await post("/api/songs/wait-all", { ids: ["a"] });
+    assert.equal(response.status, 502);
+    assert.deepEqual(await response.json(), { error: "Unexpected response from Suno" });
+  });
+
+  it("rejects empty and oversized lists", async () => {
+    const { post, calls } = harness();
+    assert.equal((await post("/api/songs/wait-all", { ids: [] })).status, 400);
+    assert.equal((await post("/api/songs/wait-all", { ids: Array.from({ length: 21 }, (_, i) => `${i}`) })).status, 400);
+    assert.equal((await post("/api/songs/wait-all", { ids: ["a"], timeout: 601 })).status, 400);
+    assert.equal(calls.length, 0);
+  });
+});
+
+describe("clip status events", () => {
+  const clip = (id: string, status: string) => ({ id, status });
+  const events = (text: string) => text.trim().split("\n\n").map((block) => ({
+    event: /^event: (.*)$/m.exec(block)?.[1],
+    data: JSON.parse(/^data: (.*)$/m.exec(block)?.[1] ?? "null") as unknown
+  }));
+
+  it("sends each status change once, then done", async () => {
+    const rounds = [clip("a", "queued"), clip("a", "queued"), clip("a", "streaming"), clip("a", "complete")];
+    let round = 0;
+    const { get } = harness({ toolResults: { "audio-wait": () => rounds[round++] } });
+    const response = await get("/api/songs/events?ids=a&until=complete");
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("Content-Type") ?? "", /text\/event-stream/);
+    assert.deepEqual(events(await response.text()), [
+      { event: "clip", data: clip("a", "queued") },
+      { event: "clip", data: clip("a", "streaming") },
+      { event: "clip", data: clip("a", "complete") },
+      { event: "done", data: { pending: [], timed_out: false } }
+    ]);
+  });
+
+  it("reports a failed wait as a failed event", async () => {
+    const { get } = harness({
+      toolResults: { "audio-wait": () => { throw new SunoToolError({ error: "slow down", code: "rate_limited" }); } }
+    });
+    assert.deepEqual(events(await (await get("/api/songs/events?ids=a")).text()), [{
+      event: "failed",
+      data: { error: "Suno MCP tool failed", details: { error: "slow down", code: "rate_limited" } }
+    }]);
+  });
+
+  it("reports a malformed wait result as a failed event", async () => {
+    const { get } = harness({ toolResults: { "audio-wait": malformedResult } });
+    assert.deepEqual(events(await (await get("/api/songs/events?ids=a")).text()), [{
+      event: "failed",
+      data: { error: "Unexpected response from Suno" }
+    }]);
+  });
+
+  it("reports a timeout in the done event", async () => {
+    const { get } = harness({
+      toolResults: { "audio-wait": clip("a", "queued") }, options: { waitPollMs: 100 }
+    });
+    const received = events(await (await get("/api/songs/events?ids=a&until=complete&timeout=1")).text());
+    assert.deepEqual(received.at(-1), { event: "done", data: { pending: ["a"], timed_out: true } });
+  });
+
+  it("validates the query and requires authentication", async () => {
+    const { app, get, url, calls } = harness();
+    assert.equal((await get("/api/songs/events")).status, 400);
+    assert.equal((await get("/api/songs/events?ids=,")).status, 400);
+    assert.equal((await get("/api/songs/events?ids=a&until=done")).status, 400);
+    assert.equal((await app.request(url("/api/songs/events?ids=a"))).status, 401);
+    assert.equal(calls.length, 0);
+  });
+});
+
+describe("listening without download credits", () => {
+  const first = "99523f88-c613-436d-ac2c-1bbeda8cd6a1";
+  const second = "646f70b8-4cdf-49c3-a7df-7b23f778d73b";
+  const playable = (id: string, status = "complete") => ({
+    id, status, song_url: `https://suno.com/song/${id}`
+  });
+  const embedded = (id: string, status = "complete") => ({
+    ...playable(id, status), embed_url: `https://suno.com/embed/${id}`
+  });
+
+  it("adds embed_url beside song_url in every response shape", async () => {
+    const shapes: Array<[string, string, JsonValue, JsonValue]> = [
+      ["/api/songs/source", "audio-retrieve", playable(first), embedded(first)],
+      ["/api/library", "library-list", { items: [playable(first)] }, { items: [embedded(first)] }],
+      ["/api/playlists/p/songs", "playlists-list-clips", { clips: [playable(first)] }, { clips: [embedded(first)] }],
+      ["/api/songs/source/wait", "audio-wait", { ...playable(first), clips: [playable(first)] }, { ...embedded(first), clips: [embedded(first)] }]
+    ];
+    for (const [path, tool, result, expected] of shapes) {
+      const { get } = harness({ toolResults: { [tool]: result } });
+      assert.deepEqual(await (await get(path)).json(), expected, path);
+    }
+  });
+
+  it("leaves results without a Suno song link unchanged", async () => {
+    const results: JsonValue[] = [
+      { id: first, status: "queued" },
+      { id: first, song_url: null },
+      { id: first, song_url: "https://example.net/song/other" },
+      { id: first, song_url: "https://suno.com/playlist/other" }
+    ];
+    for (const result of results) {
+      const { get } = harness({ toolResults: { "audio-retrieve": result } });
+      assert.deepEqual(await (await get("/api/songs/source")).json(), result);
+    }
+  });
+
+  it("keeps the generic tool route raw", async () => {
+    const { post } = harness({ toolResults: { "audio-retrieve": playable(first) } });
+    assert.deepEqual(await (await post("/api/tools/audio-retrieve/call", { id: first })).json(), playable(first));
+  });
+
+  it("links a preview once generating and waiting finishes", async () => {
+    const created = { id: first, clip_ids: [first, second], song_url: `https://suno.com/song/${first}` };
+    const { post } = harness({
+      toolResults: { "audio-create": created, "audio-wait": { clips: [playable(first), playable(second)] } }
+    });
+    const response = await post("/api/songs?wait=complete", { instrumental: true });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      created: { ...created, embed_url: `https://suno.com/embed/${first}` },
+      clips: [embedded(first), embedded(second)],
+      pending: [],
+      timed_out: false,
+      preview_url: `/preview?ids=${first},${second}`
+    });
+  });
+
+  it("includes only playable clips in a preview link", async () => {
+    const unread = { id: second, error: "audio not found", code: "not_found" };
+    const { post } = harness({ toolResults: { "audio-wait": { clips: [playable(first), unread] } } });
+    const body = await (await post("/api/songs/wait-all", { ids: [first, second] })).json() as { preview_url: string };
+    assert.equal(body.preview_url, `/preview?ids=${first}`);
+    const none = harness({ toolResults: { "audio-wait": { clips: [unread] } } });
+    const empty = await (await none.post("/api/songs/wait-all", { ids: [second] })).json() as object;
+    assert.equal(Object.hasOwn(empty, "preview_url"), false);
+  });
+
+  it("links a preview from the done event, using each clip's latest state", async () => {
+    const rounds = [{ id: first, status: "queued" }, playable(first, "streaming"), playable(first)];
+    let round = 0;
+    const { get } = harness({ toolResults: { "audio-wait": () => rounds[round++] } });
+    const text = await (await get(`/api/songs/events?ids=${first}&until=complete`)).text();
+    assert.ok(text.includes(`"embed_url":"https://suno.com/embed/${first}"`));
+    assert.equal(/^data: (.*)$/m.exec(text.trim().split("\n\n").at(-1) ?? "")?.[1], JSON.stringify({
+      pending: [], timed_out: false, preview_url: `/preview?ids=${first}`
+    }));
+  });
+
+  it("serves preview players without credentials or a Suno call", async () => {
+    const { app, calls, url } = harness();
+    const response = await app.request(url(`/preview?ids=${first},${second},${first}`));
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("Content-Type") ?? "", /text\/html/);
+    assert.match(response.headers.get("Content-Security-Policy") ?? "", /default-src 'none'; frame-src https:\/\/suno\.com;/);
+    assert.equal(response.headers.get("Referrer-Policy"), "no-referrer");
+    const html = await response.text();
+    assert.deepEqual(
+      [...html.matchAll(/<iframe src="([^"]+)"/g)].map((match) => match[1]),
+      [`https://suno.com/embed/${first}`, `https://suno.com/embed/${second}`]
+    );
+    assert.ok(!html.includes("test-secret"));
+    assert.equal(calls.length, 0);
+  });
+
+  it("rejects preview IDs that aren't UUIDs", async () => {
+    const { app, url, calls } = harness();
+    const invalid = [
+      "/preview",
+      "/preview?ids=",
+      "/preview?ids=not-a-uuid",
+      `/preview?ids=${first},`,
+      `/preview?ids=${encodeURIComponent('"><script>alert(1)</script>')}`,
+      `/preview?ids=${first}&extra=1`,
+      `/preview?ids=${Array.from({ length: 21 }, () => first).join(",")}`
+    ];
+    for (const path of invalid) {
+      const response = await app.request(url(path));
+      assert.equal(response.status, 400, path);
+      assert.ok(!(await response.text()).includes("<script>"), path);
+    }
+    assert.equal(calls.length, 0);
   });
 });
 
