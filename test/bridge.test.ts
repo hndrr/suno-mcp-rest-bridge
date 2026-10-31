@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import { createApp, type BridgeDependencies } from "../src/app.js";
 import { BridgeError, getUploadSession, putSignedUpload } from "../src/upload.js";
-import type { JsonValue } from "../src/suno.js";
+import { simplifyToolResult, type JsonValue } from "../src/suno.js";
 
 type Call = { name: string; args: Record<string, unknown> };
 
@@ -21,15 +21,20 @@ function harness({
 }: { uploadResult?: JsonValue; maxUploadBytes?: number; toolResults?: Record<string, JsonValue> } = {}) {
   const calls: Call[] = [];
   const uploaded: { url: string; bytes: Uint8Array }[] = [];
+  const contractViolations: string[] = [];
+  after(() => assert.equal(contractViolations.length, 0, `MCP contract violations:\n${contractViolations.join("\n")}`));
   const tools: BridgeDependencies = {
     callTool: async (name, args) => {
       const schema = upstreamSchemas.get(name);
-      assert.ok(schema, `Missing upstream contract for ${name}`);
-      for (const key of Object.keys(args)) {
-        assert.ok(Object.hasOwn(schema.properties, key), `${name} does not accept ${key}`);
-      }
-      for (const key of schema.required ?? []) {
-        assert.notEqual(args[key], undefined, `${name} requires ${key}`);
+      if (!schema) {
+        contractViolations.push(`Missing upstream contract for ${name}`);
+      } else {
+        for (const key of Object.keys(args)) {
+          if (!Object.hasOwn(schema.properties, key)) contractViolations.push(`${name} does not accept ${key}`);
+        }
+        for (const key of schema.required ?? []) {
+          if (args[key] === undefined) contractViolations.push(`${name} requires ${key}`);
+        }
       }
       calls.push({ name, args });
       if (Object.hasOwn(toolResults, name)) return toolResults[name];
@@ -60,8 +65,12 @@ describe("authentication and generated samples", () => {
     assert.equal(res.status, 200);
     assert.match(res.headers.get("Content-Type") ?? "", /application\/json/);
     const responseText = await res.text();
-    const body = JSON.parse(responseText) as { service: string; health: string; endpoints: Record<string, string> };
+    const body = JSON.parse(responseText) as {
+      service: string; health: string; endpoints: Record<string, string>;
+      operations: { wait: { method: string; path: string } };
+    };
     assert.equal(body.service, "suno-mcp-rest-bridge");
+    assert.deepEqual(body.operations.wait, { method: "POST", path: "/api/songs/wait" });
     assert.equal((await app.request(url(body.health))).status, 200);
     for (const path of Object.values(body.endpoints)) {
       assert.equal((await app.request(url(path))).status, 401);
@@ -128,7 +137,10 @@ describe("authentication and generated samples", () => {
     ];
     for (const [path, body] of requests) {
       for (const clip_count of [1, 2]) {
-        assert.equal((await post(path, { ...body, clip_count })).status, 400, path);
+        const response = await post(path, { ...body, clip_count });
+        assert.equal(response.status, 400, path);
+        const error = await response.json() as { issues: Array<{ path: string; message: string }> };
+        assert.match(error.issues.find((issue) => issue.path === "clip_count")?.message ?? "", /Suno MCP no longer supports clip_count/);
       }
     }
     assert.equal(calls.length, 0);
@@ -209,6 +221,20 @@ describe("waiting for generated songs", () => {
     assert.deepEqual(calls, [{ name: "audio-wait", args: { id: "first", until: "playable" } }]);
   });
 
+  it("normalizes and deduplicates batch IDs before waiting", async () => {
+    const { post, calls } = harness();
+    assert.equal((await post("/api/songs/wait", { ids: [" first ", "first", "second"] })).status, 200);
+    assert.deepEqual(calls, [{ name: "audio-wait", args: { ids: ["first", "second"], until: "playable" } }]);
+  });
+
+  it("normalizes path IDs consistently and rejects whitespace-only IDs", async () => {
+    const { get, calls } = harness();
+    assert.equal((await get("/api/songs/%20first%20/wait")).status, 200);
+    assert.deepEqual(calls, [{ name: "audio-wait", args: { id: "first", until: "playable" } }]);
+    assert.equal((await get("/api/songs/%20/wait")).status, 400);
+    assert.equal(calls.length, 1);
+  });
+
   it("rejects missing, conflicting, empty and oversized ID lists before calling Suno", async () => {
     const { post, calls } = harness();
     for (const body of [
@@ -253,6 +279,35 @@ describe("reference audio uploads", () => {
     const body = await res.json() as { clip_id: string; session_id: string };
     assert.equal(body.clip_id, "source-clip");
     assert.equal(body.session_id, "session-123");
+  });
+
+  it("completes multipart uploads when MCP upload results also contain media", async () => {
+    const media = { type: "resource_link", uri: "https://files.example.net/reference.wav", name: "reference.wav" };
+    for (const structured of [true, false]) {
+      const wrap = (payload: JsonValue) => simplifyToolResult({
+        ...(structured ? { structuredContent: { data: payload } } : {}),
+        content: [
+          { type: "text", text: JSON.stringify({ data: payload }) },
+          { type: "text", text: "Upload information is ready." },
+          media
+        ]
+      });
+      const completed = wrap({ clip: { id: "uploaded-clip", status: "processing" } });
+      const { app, uploaded, calls, url, auth } = harness({
+        toolResults: {
+          "audio-upload-create": wrap({ session_id: "media-session", clip_id: "source-clip", upload_url: "https://storage.example.net/upload" }),
+          "audio-upload-complete": completed
+        }
+      });
+      const form = new FormData();
+      form.set("file", new File([new Uint8Array([1, 2, 3])], "reference.wav", { type: "audio/wav" }));
+      const response = await app.request(url("/api/uploads/file"), { method: "POST", headers: auth, body: form });
+      assert.equal(response.status, 202);
+      assert.deepEqual(await response.json(), { session_id: "media-session", clip_id: "uploaded-clip", result: completed });
+      assert.equal(uploaded[0]?.url, "https://storage.example.net/upload");
+      assert.deepEqual(Array.from(uploaded[0].bytes), [1, 2, 3]);
+      assert.deepEqual(calls.at(-1), { name: "audio-upload-complete", args: { id: "media-session", title: "reference.wav" } });
+    }
   });
 
   it("forwards an attached file and returns the processing clip without proxying bytes", async () => {

@@ -36,7 +36,7 @@ async function createClient(): Promise<Client> {
     args: [remoteProxyPath, sunoMcpUrl],
     stderr: "inherit"
   });
-  const client = new Client({ name: "suno-rest-bridge", version: "0.2.0" });
+  const client = new Client({ name: "suno-rest-bridge", version: "0.3.0" });
   await client.connect(transport);
   return client;
 }
@@ -104,7 +104,7 @@ export function simplifyToolResult(result: {
       part.type === "text" && typeof part.text === "string"
   );
   // Suno may append a second text block with guidance after its JSON payload.
-  // Extract a single JSON payload without treating that guidance as response data.
+  // Intentionally omit that prose from text-only JSON responses; clip_ids is the REST contract.
   const payloads: JsonValue[] = [];
   for (const part of textParts) {
     try {
