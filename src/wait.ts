@@ -62,6 +62,7 @@ export async function* pollClips(
   const deadline = Date.now() + timeoutMs;
   let pending = [...new Set(ids)];
   for (;;) {
+    if (signal?.aborted) return;
     const batches: string[][] = [];
     for (let i = 0; i < pending.length; i += maxIdsPerCall) {
       batches.push(pending.slice(i, i + maxIdsPerCall));
@@ -80,7 +81,12 @@ export async function* pollClips(
     const timedOut = !failed && pending.length > 0 && Date.now() >= deadline;
     yield { clips, pending, timedOut, ...(failed ? { error: failed.reason } : {}) };
     if (failed || pending.length === 0 || timedOut || signal?.aborted) return;
-    await delay(pollMs);
+    try {
+      await delay(pollMs, undefined, { signal });
+    } catch (error) {
+      if (signal?.aborted) return;
+      throw error;
+    }
   }
 }
 
