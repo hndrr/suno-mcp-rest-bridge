@@ -81,7 +81,7 @@ export async function listSunoTools(): Promise<SunoTool[]> {
   return tools;
 }
 
-function simplifyToolResult(result: {
+export function simplifyToolResult(result: {
   isError?: boolean;
   structuredContent?: unknown;
   content?: Array<{ type: string; text?: string }>;
@@ -92,13 +92,18 @@ function simplifyToolResult(result: {
     (part): part is { type: "text"; text: string } =>
       part.type === "text" && typeof part.text === "string"
   ) ?? [];
-  if (textParts.length === 1) {
+  // Suno may append a second text block with guidance after its JSON payload.
+  // Extract a single JSON payload without treating that guidance as response data.
+  const payloads: JsonValue[] = [];
+  for (const part of textParts) {
     try {
-      return JSON.parse(textParts[0].text) as JsonValue;
+      payloads.push(JSON.parse(part.text) as JsonValue);
     } catch {
-      return { text: textParts[0].text };
+      // Keep non-JSON text in the fallback response below.
     }
   }
+  if (payloads.length === 1) return payloads[0];
+  if (textParts.length === 1) return { text: textParts[0].text };
   return { content: result.content ?? [] };
 }
 

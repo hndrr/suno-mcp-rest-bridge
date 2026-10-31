@@ -5,7 +5,7 @@ An **unofficial, single-account local** REST adapter for Suno's **official MCP**
 - **Node.js 22+**, TypeScript, Hono, maintained MCP TypeScript SDK v2 (`@modelcontextprotocol/client`)
 - `mcp-remote` handles Suno's browser-based OAuth; tokens are **not** the bridge's `API_KEY`
 - Your linked Suno account and **Suno credits** are used; this is not the separate Suno Platform REST API
-- The bridge defaults to **one** generated clip, avoiding the Suno MCP OAuth default of two when `clip_count` is omitted
+- Generated clip counts follow Suno's defaults. The current MCP schema does **not** expose `clip_count`; the bridge rejects that removed argument
 - All examples below work against `127.0.0.1` **after OAuth authorization**; they do **not** require a paid third-party API key
 
 ## Setup
@@ -44,14 +44,15 @@ export API_KEY=YOUR_LOCAL_API_KEY
 | GET | `/health` | — | Local server health (not an OAuth check) |
 | GET | `/api/tools` | tools/list | Discover actual tool names and input schemas |
 | GET | `/api/usage` | `account-usage` | Plan/credits |
-| POST | `/api/songs` | `audio-create` | Generate a song, defaults to `clip_count: 1` |
-| POST | `/api/samples` | `audio-create` | Generate a **15–60s** sample, defaults to **15s / 1 clip** and strict duration |
+| POST | `/api/songs` | `audio-create` | Generate audio; clip count follows Suno's defaults |
+| POST | `/api/samples` | `audio-create` | Generate **15–60s** samples, defaults to **15s** and strict duration |
+| POST | `/api/songs/wait` | `audio-wait` | Wait for one `id` or up to four `ids` |
 | GET | `/api/songs/:id` | `audio-retrieve` | Get clip status / song info |
 | GET | `/api/songs/:id/wait?until=playable` | `audio-wait` | Wait up to ~50 seconds until playable or complete |
 | GET | `/api/library` | `library-list` or `library-search` | List/filter your library; `query=` searches title/style |
 | GET | `/api/library/liked` | `library-liked` | Songs you liked |
 | POST | `/api/uploads/file` | upload create + HTTPS PUT + upload complete | Upload one multipart `file` in a request |
-| POST | `/api/uploads/sessions` | `audio-upload-create` | Start upload; get `upload_url`, `upload_page_url` and session ID |
+| POST | `/api/uploads/sessions` | `audio-upload-create` | Start an upload session, or process an attached `file` |
 | POST | `/api/uploads/:id/complete` | `audio-upload-complete` | Finalize a manual upload |
 | POST | `/api/songs/:id/cover` | `audio-covers-create` | Cover an existing completed clip |
 | POST | `/api/songs/:id/mashup` | `audio-mashups-create` | Blend two completed clips |
@@ -69,7 +70,17 @@ curl -sS -X POST "$BASE/api/samples" \
   -d '{"description":"Bright hi-fi future pop with female vocals", "duration":15, "idempotency_key":"sample-001"}'
 ```
 
-`duration` may be 15–60 seconds on this route. Default is 15 seconds; `clip_count: 1`, `duration_strict: true`, `duration_guidance: true` are defaults. **Suno MCP cannot generate a 5–10-second clip directly** through `duration`; generate at least 15 seconds and trim it separately if needed. A strict cap can result in an abrupt ending if the music has not naturally concluded. The sample is still a generation and **spends Suno credits**.
+`duration` may be 15–60 seconds on this route. Defaults are 15 seconds, `duration_strict: true` and `duration_guidance: true`. The number of clips is determined by Suno; `clip_count` is no longer accepted on song, sample, cover, mashup or extension requests (HTTP 400). A single request may generate multiple songs and spend credits for each. **Suno MCP cannot generate a 5–10-second clip directly** through `duration`; generate at least 15 seconds and trim it separately if needed. A strict cap can result in an abrupt ending if the music has not naturally concluded.
+
+Keep every ID in the creation response's `clip_ids` (or its `id` for a single clip), then wait for them together:
+
+```bash
+curl -sS -X POST "$BASE/api/songs/wait" \
+  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -d '{"ids":["FIRST_CLIP_ID","SECOND_CLIP_ID"], "until":"complete"}'
+```
+
+Supply exactly one of `id` or `ids`; `ids` accepts one to four clip IDs. Split larger lists into separate requests. `until` defaults to `playable`; `complete` waits for the finished files. The response passes through Suno's `clips` array for a batch; inspect every clip's status and any error. If clips are still pending after about 50 seconds, repeat the wait request. The existing `GET /api/songs/:id/wait` route remains available for a single clip.
 
 To customize the prompt instead of description, use `lyrics` and `style`; **do not combine** `description` with `lyrics` or `style`:
 
@@ -112,6 +123,10 @@ curl -sS -X POST "$BASE/api/uploads/UPLOAD_SESSION_ID/complete" \
 
 You can also open `upload_page_url` in your browser instead of doing step 2 with curl. The session URLs are valid for **one file and one hour**; if expired, create a new session. Keep these URLs private: they are temporary upload credentials.
 
+### Attached-file metadata
+
+If your client already has an attachment's download URL and file ID, `POST /api/uploads/sessions` also accepts `file: {"download_url":"https://files.example.net/reference.wav","file_id":"ATTACHMENT_ID"}` with optional `file_name` and `mime_type` inside `file`, plus an optional top-level `title`. Suno retrieves the attachment directly and the bridge returns the processing clip with HTTP 202; no separate PUT or completion call is needed. Without `file`, the endpoint returns a session with HTTP 201 as above. Use actual attachment metadata, and keep its download URL private. Local files can continue to use `/api/uploads/file`.
+
 ## 3. Cover the reference
 
 Use a **completed clip ID** from upload or your Suno library:
@@ -122,7 +137,6 @@ curl -sS -X POST "$BASE/api/songs/SOURCE_CLIP_ID/cover" \
   -d '{
     "style":"Bright hi-fi future pop, tight drums",
     "duration":30,
-    "clip_count":1,
     "controls":{"audio_influence":0.7},
     "idempotency_key":"cover-001"
   }'
@@ -174,7 +188,7 @@ curl -sS "$BASE/api/songs/CLIP_ID/wait?until=playable" -H "Authorization: Bearer
 1. **Local PoC only.** Listens on `127.0.0.1` by default. Do not turn this into an Internet-facing endpoint merely by setting `HOST=0.0.0.0`. Production use requires HTTPS, strong auth, per-user OAuth, encrypted durable token storage, rate limits/quotas, upload-size and concurrency controls.
 2. **Uploaded files are buffered only in RAM** up to `MAX_UPLOAD_MB`; no temp files are written. Single-request upload uses an HTTPS PUT and rejects redirects. It never forwards file bytes as the MCP tool JSON body.
 3. **Chargeable operations are not automatically retried.** Supply a unique `idempotency_key` to safely repeat the *same* generation request if the upstream request timed out; reusing a key with different parameters will fail.
-4. **Generation is asynchronous**: creation returns clip ID(s). For two clips you must retrieve/wait on each one. Remixes require the source clip's status to be `complete`.
-5. No actual music generation, song download or OAuth login is triggered by `npm test`. Live Suno authentication/integration must be verified on your own machine with the account you authorize. This project does not expose waveform editor, 5-second generator, or a server-side MP3 download proxy.
+4. **Generation is asynchronous**: creation returns clip ID(s). Process every returned ID; `/api/songs/wait` accepts batches of up to four. Remixes require the source clip's status to be `complete`.
+5. No actual music generation, song download or OAuth login is triggered by `npm test`. Mock calls are checked against the official input-schema snapshot in `test/fixtures/suno-input-schemas.json`, retrieved on 2026-10-31. The snapshot does not replace live integration checks with the account you authorize. This project does not expose waveform editor, 5-second generator, or a server-side MP3 download proxy.
 
 Official references: [Suno MCP](https://suno.com/mcp) · [Suno MCP FAQ](https://help.suno.com/en/articles/14486145) · [MCP TypeScript SDK v2](https://ts.sdk.modelcontextprotocol.io/v2/) · [mcp-remote](https://github.com/punkpeye/mcp-remote)
