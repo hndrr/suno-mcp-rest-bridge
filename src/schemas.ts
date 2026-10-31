@@ -162,7 +162,7 @@ export const waitQuerySchema = z.object({
 
 export const waitBodySchema = waitQuerySchema.extend({
   id: boundedId.optional(),
-  ids: z.array(boundedId).min(1).max(4).optional()
+  ids: z.array(boundedId).min(1).max(4).transform((ids) => [...new Set(ids)]).optional()
 }).refine((body) => (body.id !== undefined) !== (body.ids !== undefined), {
   message: "Provide exactly one of id or ids",
   path: ["ids"]

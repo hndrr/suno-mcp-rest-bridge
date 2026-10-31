@@ -8,6 +8,10 @@ An **unofficial, single-account local** REST adapter for Suno's **official MCP**
 - Generated clip counts follow Suno's defaults. The current MCP schema does **not** expose `clip_count`; the bridge rejects that removed argument
 - All examples below work against `127.0.0.1` **after OAuth authorization**; they do **not** require a paid third-party API key
 
+## Upgrade to 0.3.0
+
+Remove `clip_count` from existing requests: it now returns HTTP 400 with migration guidance. Suno chooses the number of generated songs, so a request can consume credits for multiple clips. Keep every returned `clip_ids` entry and wait for all of them with `POST /api/songs/wait`.
+
 ## Setup
 
 ```bash
@@ -62,7 +66,7 @@ export API_KEY=YOUR_LOCAL_API_KEY
 
 MCP tool names may use hyphens or underscores; the adapter accepts both. The `ALLOWED_TOOLS` setting governs the **generic endpoint only**: dedicated routes above are available to an authorized caller independently. Inspect `/api/tools` for the list granted to your account.
 
-Text-only MCP responses expose their structured payload or a single decoded JSON payload directly. When a response includes audio, images or resources, the bridge returns the original `content` array and any `structuredContent` field together so clients can retain every block. These are the [MCP tool result content types](https://modelcontextprotocol.io/specification/2025-06-18/server/tools#tool-result).
+Text-only MCP responses expose their structured payload or a single decoded JSON payload directly; supplementary guidance prose is intentionally omitted from these JSON responses. When a response includes audio, images or resources, the bridge returns the original `content` array and any `structuredContent` field together so clients can retain every block. These are the [MCP tool result content types](https://modelcontextprotocol.io/specification/2025-06-18/server/tools#tool-result).
 
 ## 1. Make a short sample (15 seconds)
 
@@ -83,6 +87,8 @@ curl -sS -X POST "$BASE/api/songs/wait" \
 ```
 
 Supply exactly one of `id` or `ids`; `ids` accepts one to four clip IDs. Split larger lists into separate requests. `until` defaults to `playable`; `complete` waits for the finished files. The response passes through Suno's `clips` array for a batch; inspect every clip's status and any error. If clips are still pending after about 50 seconds, repeat the wait request. The existing `GET /api/songs/:id/wait` route remains available for a single clip.
+
+IDs are trimmed, and duplicate batch IDs are sent upstream only once. The four-ID request limit applies before deduplication.
 
 To customize the prompt instead of description, use `lyrics` and `style`; **do not combine** `description` with `lyrics` or `style`:
 
