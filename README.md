@@ -48,6 +48,7 @@ export API_KEY=YOUR_LOCAL_API_KEY
 |---|---|---|---|
 | GET | `/` | — | API directory and authentication instructions |
 | GET | `/health` | — | Local server health (not an OAuth check) |
+| GET | `/preview?ids=ID1,ID2` | — | Web page with a Suno player for each song; no authentication |
 | GET | `/api/tools` | tools/list | Discover actual tool names and input schemas |
 | GET | `/api/account` | `account-me` | Signed-in user's public profile |
 | GET | `/api/account/upgrade` | `account-upgrade` | Link to upgrade the plan or buy credits |
@@ -279,7 +280,7 @@ curl -sS -X POST "$BASE/api/songs/CLIP_ID/download" \
   -d '{"format":"wav"}'
 ```
 
-If the answer is `requires_credit`, the download would spend a download credit. Repeat the request with `"confirm":true` only after the user approves; the bridge never sends `confirm` on its own. If the answer is `processing`, repeat the request. The bridge returns Suno's URL and doesn't proxy the file.
+If the answer is `requires_credit`, the download would spend a download credit. Repeat the request with `"confirm":true` only after the user approves; the bridge never sends `confirm` on its own. If the answer is `processing`, repeat the request. The bridge returns Suno's URL and doesn't proxy the file. To only listen to a result, use `embed_url` instead, which needs no download credit; see [Listen without download credits](#13-listen-without-download-credits).
 
 ## 12. Detect upstream schema changes
 
@@ -288,6 +289,27 @@ npm run check:schema
 ```
 
 This compares the schemas Suno reports now with `test/fixtures/suno-input-schemas.json`, ignoring descriptions and spending no credits. It exits with 1 when a tool was removed or its schema changed. After updating the bridge's schemas, refresh the snapshot with `npm run check:schema -- --update`.
+
+## 13. Listen without download credits
+
+Wherever a response has a `song_url`, the bridge adds an `embed_url` for Suno's embeddable player, which plays the song without spending a download credit:
+
+```json
+{
+  "id": "CLIP_ID",
+  "song_url": "https://suno.com/song/CLIP_ID",
+  "embed_url": "https://suno.com/embed/CLIP_ID"
+}
+```
+
+To compare several songs, open `/preview?ids=ID1,ID2` in a browser. It takes up to 20 song IDs and shows a player for each one. `?wait=` and `wait-all` responses, and the `done` event, include this link as `preview_url` for every clip that has an `embed_url`. It's a relative path, so add the bridge's address. `/api/tools/:name/call` returns Suno's raw result, without `embed_url`.
+
+The page has no authentication because a browser navigation can't send the Bearer header. It contains only the IDs from its own URL and never calls Suno, but setting `HOST=0.0.0.0` makes it reachable like the rest of the server.
+
+- **Treat these links as share links.** The embed player opens without signing in, **even for a private song**, so anyone who has the URL or the clip ID can listen.
+- **The embed page isn't part of Suno's MCP.** It may change or stop working without notice, and the bridge can't detect that. The rest of the API doesn't depend on it.
+- **It's for listening.** To get the file, use `/download`. The bridge doesn't extract audio from the embed page.
+- Playback was checked on finished songs only, not on a song that is still `streaming`.
 
 ## Important limitations and security
 

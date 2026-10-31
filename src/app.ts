@@ -2,7 +2,8 @@ import { timingSafeEqual } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
-import type { JsonValue, SunoTool } from "./suno.js";
+import { previewHeaders, previewPath, renderPreviewPage, withEmbedUrls } from "./embed.js";
+import type { JsonObject, JsonValue, SunoTool } from "./suno.js";
 import {
   createCoverSchema,
   createExtensionSchema,
@@ -23,6 +24,7 @@ import {
   playlistClipsQuerySchema,
   playlistClipsSchema,
   playlistsQuerySchema,
+  previewQuerySchema,
   updateWorkspaceClipsSchema,
   uploadCreateSchema,
   uploadSessionSchema,
@@ -93,11 +95,17 @@ function errorResponse(error: unknown) {
   return { status: 502 as const, body: { error: "Suno MCP connection or internal operation failed" } };
 }
 
+function previewField(clips: JsonObject[]) {
+  const preview_url = previewPath(clips);
+  return preview_url ? { preview_url } : {};
+}
+
 function waitResponse({ clips, pending, timedOut, error }: ClipRound) {
   return {
     clips,
     pending,
     timed_out: timedOut,
+    ...previewField(clips),
     ...(error !== undefined ? { wait_error: errorResponse(error).body } : {})
   };
 }
@@ -171,6 +179,9 @@ export function createApp({
   const apiKeyBuffer = Buffer.from(apiKey);
   const allowed = new Set(allowedTools.map(normalizedToolName));
   const putUpload = tools.putUpload ?? putSignedUpload;
+  // The generic tool route below stays raw and calls tools.callTool directly.
+  const callTool: BridgeDependencies["callTool"] = async (name, args) =>
+    withEmbedUrls(await tools.callTool(name, args));
   const app = new Hono();
 
   // A guard that can't read the account refuses rather than spending credits unchecked.
@@ -182,7 +193,7 @@ export function createApp({
       }]);
     }
     if (!model && minCreditsRemaining === undefined) return;
-    const usage = fields(await tools.callTool("account-usage", {}));
+    const usage = fields(await callTool("account-usage", {}));
     if (model && Array.isArray(usage.allowed_models) && !usage.allowed_models.includes(model)) {
       throw new BridgeError(400, "Invalid request", [{
         path: "model",
@@ -203,7 +214,7 @@ export function createApp({
   const create = async (c: Context, tool: string, args: ChargeableArgs) => {
     const { wait, timeout } = parse(createQuerySchema, queryObject(c));
     await guardCharge(args);
-    const created = await tools.callTool(tool, args);
+    const created = await callTool(tool, args);
     if (!wait) return c.json(created, 202);
     const ids = clipIdsFrom(created);
     if (ids.length === 0) {
@@ -212,7 +223,7 @@ export function createApp({
         wait_error: { error: "Suno returned no clip IDs to wait for" }
       }, 202);
     }
-    const result = await waitForClips(tools.callTool, ids, {
+    const result = await waitForClips(callTool, ids, {
       until: wait,
       timeoutMs: (timeout ?? defaultWaitSeconds) * 1000,
       pollMs: waitPollMs
@@ -226,6 +237,7 @@ export function createApp({
   app.get("/", (c) => c.json({
     service: "suno-mcp-rest-bridge",
     health: "/health",
+    preview: "/preview?ids=ID1,ID2",
     authentication: "Use Authorization: Bearer <API_KEY> for /api/* requests",
     endpoints: {
       tools: "/api/tools",
@@ -244,6 +256,12 @@ export function createApp({
     }
   }));
   app.get("/health", (c) => c.json({ ok: true }));
+  // Outside /api/* because a browser navigation can't send the Bearer header. The page
+  // holds only the IDs in its own URL and never calls Suno, so it exposes nothing else.
+  app.get("/preview", (c) => {
+    const { ids } = parse(previewQuerySchema, queryObject(c));
+    return c.html(renderPreviewPage(ids), 200, previewHeaders);
+  });
   app.use("/api/*", async (c, next) => {
     const header = c.req.header("Authorization");
     const received = header?.startsWith("Bearer ") ? Buffer.from(header.slice(7)) : undefined;
@@ -255,65 +273,65 @@ export function createApp({
   });
 
   app.get("/api/tools", async (c) => c.json({ tools: await tools.listTools() }));
-  app.get("/api/account", async (c) => c.json(await tools.callTool("account-me", {})));
-  app.get("/api/account/upgrade", async (c) => c.json(await tools.callTool("account-upgrade", {})));
-  app.get("/api/usage", async (c) => c.json(await tools.callTool("account-usage", {})));
+  app.get("/api/account", async (c) => c.json(await callTool("account-me", {})));
+  app.get("/api/account/upgrade", async (c) => c.json(await callTool("account-upgrade", {})));
+  app.get("/api/usage", async (c) => c.json(await callTool("account-usage", {})));
   app.get("/api/models", async (c) => {
-    const usage = fields(await tools.callTool("account-usage", {}));
+    const usage = fields(await callTool("account-usage", {}));
     return c.json({ allowed_models: Array.isArray(usage.allowed_models) ? usage.allowed_models : [] });
   });
 
   // Register collection endpoints before song-id endpoints for easy discovery.
   app.get("/api/library", async (c) => {
     const { query, ...filters } = parse(libraryQuerySchema, queryObject(c));
-    return c.json(await tools.callTool(query ? "library-search" : "library-list", {
+    return c.json(await callTool(query ? "library-search" : "library-list", {
       ...filters,
       ...(query ? { query } : {})
     }));
   });
   app.get("/api/library/liked", async (c) =>
-    c.json(await tools.callTool("library-liked", parse(likedQuerySchema, queryObject(c))))
+    c.json(await callTool("library-liked", parse(likedQuerySchema, queryObject(c))))
   );
 
   app.get("/api/voices", async (c) =>
-    c.json(await tools.callTool("voices-list", parse(voicesQuerySchema, queryObject(c))))
+    c.json(await callTool("voices-list", parse(voicesQuerySchema, queryObject(c))))
   );
   // Returns a suno.com URL where the user records and verifies the voice.
-  app.post("/api/voices/start", async (c) => c.json(await tools.callTool("voices-start", {})));
+  app.post("/api/voices/start", async (c) => c.json(await callTool("voices-start", {})));
 
   app.get("/api/playlists", async (c) =>
-    c.json(await tools.callTool("playlists-list", parse(playlistsQuerySchema, queryObject(c))))
+    c.json(await callTool("playlists-list", parse(playlistsQuerySchema, queryObject(c))))
   );
   app.post("/api/playlists", async (c) =>
-    c.json(await tools.callTool("playlists-create", parse(createPlaylistSchema, await jsonBody(c))), 201)
+    c.json(await callTool("playlists-create", parse(createPlaylistSchema, await jsonBody(c))), 201)
   );
   app.get("/api/playlists/:id/songs", async (c) =>
-    c.json(await tools.callTool("playlists-list-clips", {
+    c.json(await callTool("playlists-list-clips", {
       ...parse(playlistClipsQuerySchema, queryObject(c)),
       id: validId(c.req.param("id"))
     }))
   );
   app.post("/api/playlists/:id/songs", async (c) =>
-    c.json(await tools.callTool("playlists-add-clips", {
+    c.json(await callTool("playlists-add-clips", {
       ...parse(playlistClipsSchema, await jsonBody(c)),
       id: validId(c.req.param("id"))
     }))
   );
   app.delete("/api/playlists/:id/songs", async (c) =>
-    c.json(await tools.callTool("playlists-remove-clips", {
+    c.json(await callTool("playlists-remove-clips", {
       ...parse(playlistClipsSchema, await jsonBody(c)),
       id: validId(c.req.param("id"))
     }))
   );
 
   app.get("/api/workspaces", async (c) =>
-    c.json(await tools.callTool("workspaces-list", parse(workspacesQuerySchema, queryObject(c))))
+    c.json(await callTool("workspaces-list", parse(workspacesQuerySchema, queryObject(c))))
   );
   app.post("/api/workspaces", async (c) =>
-    c.json(await tools.callTool("workspaces-create", parse(createWorkspaceSchema, await jsonBody(c))), 201)
+    c.json(await callTool("workspaces-create", parse(createWorkspaceSchema, await jsonBody(c))), 201)
   );
   app.patch("/api/workspaces/:id/songs", async (c) =>
-    c.json(await tools.callTool("workspaces-update-clips", {
+    c.json(await callTool("workspaces-update-clips", {
       ...parse(updateWorkspaceClipsSchema, await jsonBody(c)),
       id: validId(c.req.param("id"))
     }))
@@ -329,11 +347,11 @@ export function createApp({
     create(c, "audio-create", parse(createSampleSchema, await jsonBody(c)))
   );
   app.post("/api/songs/wait", async (c) =>
-    c.json(await tools.callTool("audio-wait", parse(waitBodySchema, await jsonBody(c))))
+    c.json(await callTool("audio-wait", parse(waitBodySchema, await jsonBody(c))))
   );
   app.post("/api/songs/wait-all", async (c) => {
     const { ids, until, timeout } = parse(waitAllSchema, await jsonBody(c));
-    const result = await waitForClips(tools.callTool, ids, {
+    const result = await waitForClips(callTool, ids, {
       until, timeoutMs: timeout * 1000, pollMs: waitPollMs
     });
     if (result.error !== undefined && result.clips.length === 0) throw result.error;
@@ -348,56 +366,59 @@ export function createApp({
     return streamSSE(c, async (stream) => {
       const abort = new AbortController();
       stream.onAbort(() => abort.abort());
-      const statuses = new Map<string, JsonValue>();
-      const rounds = pollClips(tools.callTool, ids, {
+      const latest = new Map<string, JsonObject>();
+      const rounds = pollClips(callTool, ids, {
         until, timeoutMs: timeout * 1000, pollMs: waitPollMs, signal: abort.signal
       });
       for await (const { clips, pending, timedOut, error } of rounds) {
         for (const clip of clips) {
-          const status = clip.status ?? null;
-          if (statuses.has(clip.id as string) && statuses.get(clip.id as string) === status) continue;
-          statuses.set(clip.id as string, status);
+          const previous = latest.get(clip.id as string);
+          latest.set(clip.id as string, clip);
+          if (previous && previous.status === clip.status) continue;
           await stream.writeSSE({ event: "clip", data: JSON.stringify(clip) });
         }
         if (error !== undefined) {
           // "failed" because browsers reserve the "error" event for connection problems.
           await stream.writeSSE({ event: "failed", data: JSON.stringify(errorResponse(error).body) });
         } else if (pending.length === 0 || timedOut) {
-          await stream.writeSSE({ event: "done", data: JSON.stringify({ pending, timed_out: timedOut }) });
+          await stream.writeSSE({
+            event: "done",
+            data: JSON.stringify({ pending, timed_out: timedOut, ...previewField([...latest.values()]) })
+          });
         }
       }
     });
   });
   app.get("/api/songs/:id", async (c) =>
-    c.json(await tools.callTool("audio-retrieve", { id: validId(c.req.param("id")) }))
+    c.json(await callTool("audio-retrieve", { id: validId(c.req.param("id")) }))
   );
   app.patch("/api/songs/:id", async (c) =>
-    c.json(await tools.callTool("audio-edit", {
+    c.json(await callTool("audio-edit", {
       ...parse(editSongSchema, await jsonBody(c)),
       id: validId(c.req.param("id"))
     }))
   );
   app.get("/api/songs/:id/analysis", async (c) =>
-    c.json(await tools.callTool("audio-analysis", { id: validId(c.req.param("id")) }))
+    c.json(await callTool("audio-analysis", { id: validId(c.req.param("id")) }))
   );
   app.get("/api/songs/:id/lyrics-alignment", async (c) =>
-    c.json(await tools.callTool("audio-lyrics-alignment", { id: validId(c.req.param("id")) }))
+    c.json(await callTool("audio-lyrics-alignment", { id: validId(c.req.param("id")) }))
   );
   // A download can spend a credit, so `confirm` only ever comes from the client.
   app.post("/api/songs/:id/download", async (c) =>
-    c.json(await tools.callTool("audio-download", {
+    c.json(await callTool("audio-download", {
       ...parse(downloadSchema, await jsonBody(c, true)),
       id: validId(c.req.param("id"))
     }))
   );
   app.post("/api/songs/:id/like", async (c) =>
-    c.json(await tools.callTool("audio-like", { id: validId(c.req.param("id")) }))
+    c.json(await callTool("audio-like", { id: validId(c.req.param("id")) }))
   );
   app.delete("/api/songs/:id/like", async (c) =>
-    c.json(await tools.callTool("audio-unlike", { id: validId(c.req.param("id")) }))
+    c.json(await callTool("audio-unlike", { id: validId(c.req.param("id")) }))
   );
   app.get("/api/songs/:id/wait", async (c) =>
-    c.json(await tools.callTool("audio-wait", {
+    c.json(await callTool("audio-wait", {
       id: validId(c.req.param("id")),
       ...parse(waitQuerySchema, queryObject(c))
     }))
@@ -406,10 +427,10 @@ export function createApp({
   // Without a file this returns signed URLs; an attached file starts processing immediately.
   app.post("/api/uploads/sessions", async (c) => {
     const args = parse(uploadCreateSchema, await jsonBody(c, true));
-    return c.json(await tools.callTool("audio-upload-create", args), args.file ? 202 : 201);
+    return c.json(await callTool("audio-upload-create", args), args.file ? 202 : 201);
   });
   app.post("/api/uploads/:id/complete", async (c) =>
-    c.json(await tools.callTool("audio-upload-complete", {
+    c.json(await callTool("audio-upload-complete", {
       id: validId(c.req.param("id")),
       ...parse(uploadSessionSchema, await jsonBody(c, true))
     }), 202)
@@ -430,10 +451,10 @@ export function createApp({
     const { title } = parse(uploadSessionSchema, {
       title: maybeTitle === null ? file.name : maybeTitle
     });
-    const rawSession = await tools.callTool("audio-upload-create", { title });
+    const rawSession = await callTool("audio-upload-create", { title });
     const { sessionId, uploadUrl, clipId } = getUploadSession(rawSession);
     await putUpload(uploadUrl, new Uint8Array(await file.arrayBuffer()));
-    const completed = await tools.callTool("audio-upload-complete", { id: sessionId, title });
+    const completed = await callTool("audio-upload-complete", { id: sessionId, title });
     return c.json({
       session_id: sessionId,
       clip_id: getUploadedClipId(completed) ?? clipId ?? null,
@@ -460,7 +481,7 @@ export function createApp({
     })
   );
   app.post("/api/songs/:id/full-song", async (c) =>
-    c.json(await tools.callTool("audio-full-song", {
+    c.json(await callTool("audio-full-song", {
       ...parse(fullSongSchema, await jsonBody(c, true)),
       id: validId(c.req.param("id"))
     }), 202)
