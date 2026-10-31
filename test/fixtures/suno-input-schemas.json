@@ -3,10 +3,41 @@
   "retrieved_at": "2026-10-31T03:38:24.467Z",
   "tools": [
     {
+      "name": "account-me",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "account-upgrade",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "account-usage",
       "inputSchema": {
         "type": "object",
         "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "audio-analysis",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
         "additionalProperties": false
       }
     },
@@ -164,6 +195,54 @@
       }
     },
     {
+      "name": "audio-download",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "confirm": {
+            "default": false,
+            "type": "boolean"
+          },
+          "format": {
+            "default": "mp3",
+            "enum": [
+              "mp3",
+              "wav"
+            ],
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "audio-edit",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "lyrics": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "audio-extensions-create",
       "inputSchema": {
         "type": "object",
@@ -264,6 +343,36 @@
       }
     },
     {
+      "name": "audio-like",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "audio-lyrics-alignment",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "audio-mashups-create",
       "inputSchema": {
         "type": "object",
@@ -337,6 +446,21 @@
     },
     {
       "name": "audio-retrieve",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "audio-unlike",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -541,6 +665,297 @@
             "type": "string"
           }
         },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "playlists-add-clips",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "clip_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "clip_ids"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "playlists-create",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "visibility": {
+            "default": "private",
+            "enum": [
+              "public",
+              "private"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "playlists-list",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "limit": {
+            "default": 25,
+            "maximum": 50,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "query": {
+            "maxLength": 200,
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "playlists-list-clips",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "limit": {
+            "default": 10,
+            "maximum": 50,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "playlists-remove-clips",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "clip_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "clip_ids"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "speech-create",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "backing_music": {
+            "default": false,
+            "type": "boolean"
+          },
+          "duration": {
+            "maximum": 360,
+            "minimum": 15,
+            "type": "integer"
+          },
+          "duration_guidance": {
+            "type": "boolean"
+          },
+          "duration_strict": {
+            "type": "boolean"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "negative_style": {
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "prompt": {
+            "maxLength": 2947,
+            "type": "string"
+          },
+          "script": {
+            "maxLength": 5000,
+            "type": "string"
+          },
+          "style": {
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "vocal_gender": {
+            "enum": [
+              "male",
+              "female"
+            ],
+            "type": "string"
+          },
+          "voice_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "voices-list",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "collection": {
+            "default": "own",
+            "enum": [
+              "own",
+              "loved"
+            ],
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "limit": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "query": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "voices-start",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "workspaces-create",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "workspaces-list",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "query": {
+            "maxLength": 200,
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "workspaces-update-clips",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "add": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "remove": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "type": "array"
+          }
+        },
+        "required": [
+          "id"
+        ],
         "additionalProperties": false
       }
     }

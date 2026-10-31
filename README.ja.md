@@ -81,13 +81,30 @@ curl -X POST http://127.0.0.1:8787/api/songs/SOURCE_CLIP_ID/cover \
 
 | メソッド・パス | 内容 |
 |---|---|
+| `GET /api/account` | ログイン中のユーザーの公開プロフィール |
+| `GET /api/account/upgrade` | プラン変更・クレジット購入のリンク |
 | `GET /api/usage` | クレジット・プラン情報 |
+| `GET /api/models` | このアカウントで `model` に指定できるラベル |
 | `GET /api/library?query=...` | 既存楽曲の検索・参照 |
 | `GET /api/library/liked` | いいね済みの曲 |
 | `POST /api/songs` | 通常生成。曲数はSuno側の既定値 |
+| `POST /api/speech` | `script` または `prompt` から音声を生成。モデルは既定のみ |
 | `POST /api/songs/wait` | 1件の `id` または最大4件の `ids` を待機 |
+| `POST /api/songs/wait-all` | 最大20件の `ids` を、確定するまで繰り返し待機 |
+| `GET /api/songs/events?ids=ID1,ID2` | 曲の状態変化をServer-Sent Eventsで通知 |
 | `GET /api/songs/:id` | 曲情報・生成状態 |
+| `PATCH /api/songs/:id` | 曲の `title`・`lyrics` を変更 |
 | `GET /api/songs/:id/wait` | 再生可能まで待つ |
+| `GET /api/songs/:id/analysis` | タグ、拍、テンポ、キー、セクションの取得。`status` が `processing` でなくなるまで再取得 |
+| `GET /api/songs/:id/lyrics-alignment` | 単語ごとのタイミング取得。`status` が `processing` でなくなるまで再取得 |
+| `POST /api/songs/:id/download` | MP3・WAVのURLを取得。ダウンロードクレジットを使う場合あり |
+| `POST`・`DELETE /api/songs/:id/like` | いいね・解除 |
+| `GET /api/voices` | `voice_id` に使えるボイスの一覧 |
+| `POST /api/voices/start` | ボイスを作成するsuno.comのURLを取得 |
+| `GET`・`POST /api/playlists` | プレイリストの一覧・作成 |
+| `GET`・`POST`・`DELETE /api/playlists/:id/songs` | プレイリスト内の曲の一覧・追加・削除 |
+| `GET`・`POST /api/workspaces` | ワークスペースの一覧・作成 |
+| `PATCH /api/workspaces/:id/songs` | `add`・`remove` で曲を移動。応答の `skipped` を確認 |
 | `POST /api/songs/:id/mashup` | `additional_audio_id` で2曲を合成 |
 | `POST /api/songs/:id/extend` | `continue_at` 秒以降を生成 |
 | `POST /api/songs/:id/full-song` | Extensionチェーンを結合 |
@@ -110,6 +127,15 @@ Sunoのツールがリクエストを拒否した場合は、`details` にSuno�
 | 上記以外、コードなし、または `details` がオブジェクトでない場合 | 502 |
 
 接続エラーも502を返しますが、`details` は含みません。以前はツールの拒否もすべて502だったので、502だけをSunoのエラーとして扱うクライアントは修正が必要です。
+
+## 便利機能
+
+- **モデルの事前確認:** `model` がこのアカウントで使えない場合は、Sunoに送らず400を返します。クレジットは消費しません。
+- **生成して待つ:** `/api/songs`、`/api/samples`、`/api/speech`、`/cover`、`/mashup`、`/extend` に `?wait=playable` または `?wait=complete` を付けると、作成から待機までを1リクエストで行います。`timeout` は1〜600秒で、既定は300秒です。待機が失敗やタイムアウトになっても、作成済みの `created` と `pending` を202で返します。
+- **クレジット上限:** `.env` の `MIN_CREDITS_REMAINING` を設定すると、残高がこの値を下回ったときに402を返して生成を止めます。残高を読めない場合は502で拒否します。
+- **冪等キーの必須化:** `REQUIRE_IDEMPOTENCY_KEY=true` にすると、`idempotency_key` のない生成リクエストに400を返します。
+- **ダウンロードの確認:** `requires_credit` が返ったら、ユーザーの承認を得てから `"confirm":true` で再度呼びます。ブリッジが自動で `confirm` を付けることはありません。
+- **スキーマ差分の確認:** `npm run check:schema` で、実際のツール定義と `test/fixtures/suno-input-schemas.json` を比べます。クレジットは消費しません。更新は `npm run check:schema -- --update` です。
 
 ## 制約
 

@@ -1,6 +1,6 @@
 # [WIP] Suno MCP → REST API bridge (TypeScript / Hono)
 
-An **unofficial, single-account local** REST adapter for Suno's **official MCP** endpoint at `https://api.suno.com/mcp`. Supports short samples, custom songs, library search, source-audio uploads, covers, mashups, extensions, full-song joining and status polling. **No unofficial Suno scraper or third-party Suno API is involved.**
+An **unofficial, single-account local** REST adapter for Suno's **official MCP** endpoint at `https://api.suno.com/mcp`. Supports short samples, custom songs, speech, library search, source-audio uploads, covers, mashups, extensions, full-song joining, status polling and events, audio analysis, downloads, voices, playlists and workspaces. **No unofficial Suno scraper or third-party Suno API is involved.**
 
 - **Node.js 22+**, TypeScript, Hono, maintained MCP TypeScript SDK v2 (`@modelcontextprotocol/client`)
 - `mcp-remote` handles Suno's browser-based OAuth; tokens are **not** the bridge's `API_KEY`
@@ -49,14 +49,31 @@ export API_KEY=YOUR_LOCAL_API_KEY
 | GET | `/` | — | API directory and authentication instructions |
 | GET | `/health` | — | Local server health (not an OAuth check) |
 | GET | `/api/tools` | tools/list | Discover actual tool names and input schemas |
+| GET | `/api/account` | `account-me` | Signed-in user's public profile |
+| GET | `/api/account/upgrade` | `account-upgrade` | Link to upgrade the plan or buy credits |
 | GET | `/api/usage` | `account-usage` | Plan/credits |
+| GET | `/api/models` | `account-usage` | Model labels this account may send as `model` |
 | POST | `/api/songs` | `audio-create` | Generate audio; clip count follows Suno's defaults |
 | POST | `/api/samples` | `audio-create` | Generate **15–60s** samples, defaults to **15s** and strict duration |
+| POST | `/api/speech` | `speech-create` | Generate speech from a `script` or a `prompt`; always uses the default model |
 | POST | `/api/songs/wait` | `audio-wait` | Wait for one `id` or up to four `ids` |
+| POST | `/api/songs/wait-all` | `audio-wait` | Wait for up to 20 `ids`, repeating until they settle |
+| GET | `/api/songs/events?ids=ID1,ID2` | `audio-wait` | Server-Sent Events stream of clip status changes |
 | GET | `/api/songs/:id` | `audio-retrieve` | Get clip status / song info |
+| PATCH | `/api/songs/:id` | `audio-edit` | Change a song's `title` or `lyrics` |
 | GET | `/api/songs/:id/wait?until=playable` | `audio-wait` | Wait up to ~50 seconds until playable or complete |
+| GET | `/api/songs/:id/analysis` | `audio-analysis` | Tags, beats, tempo, key and sections; poll until `status` leaves `processing` |
+| GET | `/api/songs/:id/lyrics-alignment` | `audio-lyrics-alignment` | Timing for each sung word; poll until `status` leaves `processing` |
+| POST | `/api/songs/:id/download` | `audio-download` | Get an MP3 or WAV URL; may spend a download credit |
+| POST, DELETE | `/api/songs/:id/like` | `audio-like`, `audio-unlike` | Like or unlike a song |
 | GET | `/api/library` | `library-list` or `library-search` | List/filter your library; `query=` searches title/style |
 | GET | `/api/library/liked` | `library-liked` | Songs you liked |
+| GET | `/api/voices` | `voices-list` | List your voices to use as `voice_id` |
+| POST | `/api/voices/start` | `voices-start` | Get a suno.com URL where you create a voice |
+| GET, POST | `/api/playlists` | `playlists-list`, `playlists-create` | List or create playlists |
+| GET, POST, DELETE | `/api/playlists/:id/songs` | `playlists-list-clips`, `playlists-add-clips`, `playlists-remove-clips` | List, add or remove a playlist's songs |
+| GET, POST | `/api/workspaces` | `workspaces-list`, `workspaces-create` | List or create workspaces |
+| PATCH | `/api/workspaces/:id/songs` | `workspaces-update-clips` | Move songs with `add` and `remove`; check `skipped` in the response |
 | POST | `/api/uploads/file` | upload create + HTTPS PUT + upload complete | Upload one multipart `file` in a request |
 | POST | `/api/uploads/sessions` | `audio-upload-create` | Start an upload session, or process an attached `file` |
 | POST | `/api/uploads/:id/complete` | `audio-upload-complete` | Finalize a manual upload |
@@ -205,6 +222,72 @@ curl -sS "$BASE/api/songs/CLIP_ID/wait?until=playable" -H "Authorization: Bearer
 ```
 
 `library-list` requires Suno OAuth `library:read`, and `library-search` requires `library:search`. Some feature grants (voice, advanced controls, uploads, remixes) depend on your plan / server grants. The Suno MCP is beta, so inspect `/api/tools` if a route fails because the corresponding tool isn't granted.
+
+## 7. Choose a model
+
+```bash
+curl -sS "$BASE/api/models" -H "Authorization: Bearer $API_KEY"
+```
+
+Send one of the returned labels as `model` when you generate. The bridge checks it first and returns 400 with the allowed labels if this account doesn't hold it, so no credits are spent. If you omit `model`, Suno uses your plan's default, which the MCP doesn't name; set `model` explicitly when results must stay on one model.
+
+## 8. Generate and wait in one request
+
+Add `?wait=playable` or `?wait=complete` to `/api/songs`, `/api/samples`, `/api/speech`, `/cover`, `/mashup` or `/extend`:
+
+```bash
+curl -sS -X POST "$BASE/api/songs?wait=complete&timeout=300" \
+  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -d '{"description":"Bright hi-fi future pop", "idempotency_key":"song-001"}'
+```
+
+The response has `created` (Suno's creation result), plus `clips`, `pending`, and `timed_out`. It returns 200 when every clip has settled and 202 otherwise. `timeout` is 1–600 seconds and defaults to 300; a wait can overrun it by up to about 50 seconds because a call already in progress is allowed to finish.
+
+Credits are spent once Suno accepts the creation, so a wait that times out or fails doesn't fail the request: it returns 202 with `created` and, if the wait failed, `wait_error`. Keep waiting with the IDs in `pending`. A settled clip can still have failed, so check each clip's `status` and `error`.
+
+## 9. Wait for more than four clips
+
+`POST /api/songs/wait-all` takes up to 20 `ids`, an optional `until` and an optional `timeout`, and returns `clips`, `pending` and `timed_out` as above. It splits the IDs into batches of four and repeats until they settle. If the wait fails before any clip is read, it returns the upstream error status.
+
+To follow progress instead of holding a request open, use the event stream:
+
+```bash
+curl -N "$BASE/api/songs/events?ids=FIRST_CLIP_ID,SECOND_CLIP_ID&until=complete" \
+  -H "Authorization: Bearer $API_KEY"
+```
+
+| Event | Data | Meaning |
+|---|---|---|
+| `clip` | The clip object | A clip was first seen or its status changed |
+| `done` | `{"pending":[...],"timed_out":false}` | The stream ends: every clip settled, or `timeout` passed |
+| `failed` | The error body | The stream ends: a wait call failed |
+
+The stream polls for this connection only. The bridge keeps no job state, so a reconnecting client starts again from each clip's current status. The browser `EventSource` API can't send the `Authorization` header, so use `fetch` from a browser.
+
+## 10. Guard your credits
+
+Set these in `.env`; both apply to `/api/songs`, `/api/samples`, `/api/speech`, `/cover`, `/mashup` and `/extend`:
+
+- `MIN_CREDITS_REMAINING`: returns 402 instead of generating when the balance is below this value. It reads the balance before each request and doesn't know what the request will cost, so the balance can still end up below the value. If the balance can't be read, the request is refused with 502. A retry with the same `idempotency_key` is refused too once the balance is too low.
+- `REQUIRE_IDEMPOTENCY_KEY=true`: returns 400 when a request has no `idempotency_key`, which protects against double charges when a client retries after a timeout.
+
+## 11. Download a song
+
+```bash
+curl -sS -X POST "$BASE/api/songs/CLIP_ID/download" \
+  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -d '{"format":"wav"}'
+```
+
+If the answer is `requires_credit`, the download would spend a download credit. Repeat the request with `"confirm":true` only after the user approves; the bridge never sends `confirm` on its own. If the answer is `processing`, repeat the request. The bridge returns Suno's URL and doesn't proxy the file.
+
+## 12. Detect upstream schema changes
+
+```bash
+npm run check:schema
+```
+
+This compares the schemas Suno reports now with `test/fixtures/suno-input-schemas.json`, ignoring descriptions and spending no credits. It exits with 1 when a tool was removed or its schema changed. After updating the bridge's schemas, refresh the snapshot with `npm run check:schema -- --update`.
 
 ## Important limitations and security
 

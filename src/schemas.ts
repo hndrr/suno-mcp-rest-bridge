@@ -168,5 +168,121 @@ export const waitBodySchema = waitQuerySchema.extend({
   path: ["ids"]
 });
 
+export const defaultWaitSeconds = 300;
+const waitSeconds = z.coerce.number().int().min(1).max(600);
+const untilField = z.enum(["playable", "complete"]);
+// Each batch of four IDs is one concurrent upstream call, so this caps them at five.
+const waitIds = z.array(boundedId).min(1).max(20).transform((ids) => [...new Set(ids)]);
+
+export const createQuerySchema = z.object({
+  wait: untilField.optional(),
+  timeout: waitSeconds.optional()
+}).strict().refine((query) => query.timeout === undefined || query.wait !== undefined, {
+  message: "timeout requires wait",
+  path: ["timeout"]
+});
+
+export const waitAllSchema = z.object({
+  ids: waitIds,
+  until: untilField.default("playable"),
+  timeout: waitSeconds.default(defaultWaitSeconds)
+}).strict();
+
+export const eventsQuerySchema = z.object({
+  ids: z.string().transform((ids) => ids.split(",")).pipe(waitIds),
+  until: untilField.default("playable"),
+  timeout: waitSeconds.default(defaultWaitSeconds)
+}).strict();
+
+export const createSpeechSchema = z.object({
+  script: z.string().min(1).max(5000).optional(),
+  prompt: z.string().trim().min(1).max(2947).optional(),
+  backing_music: z.boolean().optional(),
+  duration: duration.optional(),
+  duration_guidance: z.boolean().optional(),
+  duration_strict: z.boolean().optional(),
+  idempotency_key: idempotencyKey.optional(),
+  negative_style: z.string().min(1).max(1000).optional(),
+  style: z.string().min(1).max(1000).optional(),
+  title: z.string().min(1).max(256).optional(),
+  vocal_gender: z.enum(["male", "female"]).optional(),
+  voice_id: boundedId.optional(),
+  workspace_id: z.string().uuid().optional()
+}).strict().superRefine((speech, ctx) => {
+  const issue = (path: string, message: string) => ctx.addIssue({ code: "custom", path: [path], message });
+  if ((speech.script === undefined) === (speech.prompt === undefined)) {
+    issue("script", "Provide exactly one of script or prompt");
+  }
+  if (speech.prompt !== undefined && (speech.style !== undefined || speech.negative_style !== undefined)) {
+    issue("prompt", "style and negative_style require script");
+  }
+  if (speech.backing_music && speech.prompt !== undefined && speech.prompt.length > 2887) {
+    issue("prompt", "prompt is limited to 2887 characters with backing_music");
+  }
+  if (speech.duration === undefined &&
+      (speech.duration_strict !== undefined || speech.duration_guidance !== undefined)) {
+    issue("duration", "duration_strict and duration_guidance require duration");
+  }
+});
+
+export const downloadSchema = z.object({
+  format: z.enum(["mp3", "wav"]).optional(),
+  confirm: z.boolean().optional()
+}).strict();
+
+export const editSongSchema = z.object({
+  title: z.string().optional(),
+  lyrics: z.string().optional()
+}).strict().refine((edit) => edit.title !== undefined || edit.lyrics !== undefined, {
+  message: "Provide title or lyrics",
+  path: ["title"]
+});
+
+export const voicesQuerySchema = z.object({
+  collection: z.enum(["own", "loved"]).optional(),
+  cursor: libraryFields.cursor,
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  query: z.string().min(1).max(200).optional()
+}).strict();
+
+export const playlistsQuerySchema = z.object({
+  cursor: libraryFields.cursor,
+  limit: libraryFields.limit,
+  query: z.string().min(1).max(200).optional()
+}).strict();
+
+export const createPlaylistSchema = z.object({
+  name: z.string().min(1).max(100),
+  description: z.string().max(2000).optional(),
+  visibility: z.enum(["public", "private"]).optional()
+}).strict();
+
+export const playlistClipsQuerySchema = z.object({
+  cursor: libraryFields.cursor,
+  limit: libraryFields.limit
+}).strict();
+
+export const playlistClipsSchema = z.object({
+  clip_ids: z.array(boundedId).min(1).max(100)
+}).strict();
+
+export const workspacesQuerySchema = z.object({
+  cursor: libraryFields.cursor,
+  query: z.string().min(1).max(200).optional()
+}).strict();
+
+export const createWorkspaceSchema = z.object({
+  name: z.string().min(1).max(100),
+  description: z.string().max(2000).optional()
+}).strict();
+
+export const updateWorkspaceClipsSchema = z.object({
+  add: z.array(boundedId).max(50).optional(),
+  remove: z.array(boundedId).max(50).optional()
+}).strict().refine((update) => Boolean(update.add?.length || update.remove?.length), {
+  message: "Provide songs in add or remove",
+  path: ["add"]
+});
+
 export type CreateSongInput = z.infer<typeof createSongSchema>;
 export type CreateSampleInput = z.infer<typeof createSampleSchema>;
