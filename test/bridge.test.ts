@@ -1,20 +1,43 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { readFileSync } from "node:fs";
+import { after, describe, it } from "node:test";
 import { createApp, type BridgeDependencies } from "../src/app.js";
 import { BridgeError, getUploadSession, putSignedUpload } from "../src/upload.js";
-import type { JsonValue } from "../src/suno.js";
+import { simplifyToolResult, type JsonValue } from "../src/suno.js";
 
 type Call = { name: string; args: Record<string, unknown> };
 
+// Captured from the official MCP server, independently of the bridge's Zod schemas.
+const upstreamSnapshot = JSON.parse(readFileSync(
+  new URL("./fixtures/suno-input-schemas.json", import.meta.url), "utf8"
+)) as { tools: Array<{ name: string; inputSchema: { properties: Record<string, unknown>; required?: string[] } }> };
+const upstreamSchemas = new Map(upstreamSnapshot.tools.map((tool) => [tool.name, tool.inputSchema]));
+
+/** Build an isolated bridge whose mock calls are checked against the captured MCP contract. */
 function harness({
   uploadResult = { id: "session-123", upload_url: "https://storage.example.net/upload" } as JsonValue,
-  maxUploadBytes = 1024 * 1024
-}: { uploadResult?: JsonValue; maxUploadBytes?: number } = {}) {
+  maxUploadBytes = 1024 * 1024,
+  toolResults = {}
+}: { uploadResult?: JsonValue; maxUploadBytes?: number; toolResults?: Record<string, JsonValue> } = {}) {
   const calls: Call[] = [];
   const uploaded: { url: string; bytes: Uint8Array }[] = [];
+  const contractViolations: string[] = [];
+  after(() => assert.equal(contractViolations.length, 0, `MCP contract violations:\n${contractViolations.join("\n")}`));
   const tools: BridgeDependencies = {
     callTool: async (name, args) => {
+      const schema = upstreamSchemas.get(name);
+      if (!schema) {
+        contractViolations.push(`Missing upstream contract for ${name}`);
+      } else {
+        for (const key of Object.keys(args)) {
+          if (!Object.hasOwn(schema.properties, key)) contractViolations.push(`${name} does not accept ${key}`);
+        }
+        for (const key of schema.required ?? []) {
+          if (args[key] === undefined) contractViolations.push(`${name} requires ${key}`);
+        }
+      }
       calls.push({ name, args });
+      if (Object.hasOwn(toolResults, name)) return toolResults[name];
       if (name === "audio-upload-create") return uploadResult;
       if (name === "audio-upload-complete") return { id: "source-clip", status: "processing" };
       return { ok: true, name, args };
@@ -42,8 +65,12 @@ describe("authentication and generated samples", () => {
     assert.equal(res.status, 200);
     assert.match(res.headers.get("Content-Type") ?? "", /application\/json/);
     const responseText = await res.text();
-    const body = JSON.parse(responseText) as { service: string; health: string; endpoints: Record<string, string> };
+    const body = JSON.parse(responseText) as {
+      service: string; health: string; endpoints: Record<string, string>;
+      operations: { wait: { method: string; path: string } };
+    };
     assert.equal(body.service, "suno-mcp-rest-bridge");
+    assert.deepEqual(body.operations.wait, { method: "POST", path: "/api/songs/wait" });
     assert.equal((await app.request(url(body.health))).status, 200);
     for (const path of Object.values(body.endpoints)) {
       assert.equal((await app.request(url(path))).status, 401);
@@ -61,42 +88,72 @@ describe("authentication and generated samples", () => {
     assert.equal((await app.request(url("/health"))).status, 200);
   });
 
-  it("forces a single clip on ordinary song creation by default", async () => {
+  it("creates songs without injecting the removed clip_count argument", async () => {
     const { post, calls } = harness();
     const res = await post("/api/songs", { description: "bright pop", duration: 30 });
     assert.equal(res.status, 202);
     assert.equal(calls.at(-1)?.name, "audio-create");
-    assert.equal(calls.at(-1)?.args.clip_count, 1);
+    assert.ok(!Object.hasOwn(calls.at(-1)!.args, "clip_count"));
     assert.equal(calls.at(-1)?.args.duration, 30);
   });
 
-  it("defaults samples to 15 seconds, strict duration and one clip", async () => {
+  it("defaults samples to 15 seconds and strict duration without choosing a clip count", async () => {
     const { post, calls } = harness();
     assert.equal((await post("/api/samples", { instrumental: true })).status, 202);
     assert.deepEqual({
       duration: calls.at(-1)?.args.duration,
-      count: calls.at(-1)?.args.clip_count,
       strict: calls.at(-1)?.args.duration_strict,
       guidance: calls.at(-1)?.args.duration_guidance
-    }, { duration: 15, count: 1, strict: true, guidance: true });
+    }, { duration: 15, strict: true, guidance: true });
+    assert.ok(!Object.hasOwn(calls.at(-1)!.args, "clip_count"));
   });
 
-  it("validates duration, prompt modes and unsupported sample clip count", async () => {
+  it("validates duration and prompt modes before calling Suno", async () => {
     const { post, calls } = harness();
     assert.equal((await post("/api/samples", { description: "a", duration: 10 })).status, 400);
-    assert.equal((await post("/api/samples", { description: "a", clip_count: 2 })).status, 400);
     assert.equal((await post("/api/songs", { description: "a", style: "jazz" })).status, 400);
     assert.equal((await post("/api/songs", { description: "a", controls: { audio_influence: .6 } })).status, 400);
     assert.equal(calls.length, 0);
   });
 
-  it("passes through custom lyrics, style, advanced controls and explicit clip_count", async () => {
+  it("passes through custom lyrics, style and advanced controls", async () => {
     const { post, calls } = harness();
     assert.equal((await post("/api/songs", {
-      lyrics: "hello", style: "indie pop", clip_count: 2,
+      lyrics: "hello", style: "indie pop",
       controls: { style_influence: 0.5, weirdness: 0.2 }, idempotency_key: "demo-1"
     })).status, 202);
-    assert.equal(calls.at(-1)?.args.clip_count, 2);
+    assert.equal(calls.at(-1)?.args.lyrics, "hello");
+    assert.deepEqual(calls.at(-1)?.args.controls, { style_influence: 0.5, weirdness: 0.2 });
+  });
+
+  it("rejects clip_count on every generation route before calling Suno", async () => {
+    const { post, calls } = harness();
+    const requests: Array<[string, Record<string, unknown>]> = [
+      ["/api/songs", { description: "bright pop" }],
+      ["/api/samples", { instrumental: true }],
+      ["/api/songs/source/cover", {}],
+      ["/api/songs/source/mashup", { additional_audio_id: "second" }],
+      ["/api/songs/source/extend", { continue_at: 1 }]
+    ];
+    for (const [path, body] of requests) {
+      for (const clip_count of [1, 2]) {
+        const response = await post(path, { ...body, clip_count });
+        assert.equal(response.status, 400, path);
+        const error = await response.json() as { issues: Array<{ path: string; message: string }> };
+        assert.match(error.issues.find((issue) => issue.path === "clip_count")?.message ?? "", /Suno MCP no longer supports clip_count/);
+      }
+    }
+    assert.equal(calls.length, 0);
+  });
+
+  it("returns every clip ID when Suno generates multiple songs", async () => {
+    const result = { id: "first", clip_ids: ["first", "second"], status: "submitted" };
+    for (const path of ["/api/songs", "/api/samples"]) {
+      const { post } = harness({ toolResults: { "audio-create": result } });
+      const response = await post(path, { instrumental: true });
+      assert.equal(response.status, 202);
+      assert.deepEqual(await response.json(), result);
+    }
   });
 });
 
@@ -109,7 +166,7 @@ describe("reference-based generation", () => {
     assert.equal(res.status, 202);
     assert.deepEqual(calls.at(-1), {
       name: "audio-covers-create",
-      args: { id: "source-id", clip_count: 1, duration: 30, style: "bright hi-fi pop", controls: { audio_influence: 0.7 } }
+      args: { id: "source-id", duration: 30, style: "bright hi-fi pop", controls: { audio_influence: 0.7 } }
     });
   });
 
@@ -145,6 +202,60 @@ describe("reference-based generation", () => {
   });
 });
 
+describe("waiting for generated songs", () => {
+  it("waits for all supplied IDs and preserves every clip in the response", async () => {
+    const result = {
+      id: "first", status: "complete",
+      clips: [{ id: "first", status: "complete" }, { id: "second", status: "complete" }]
+    };
+    const { post, calls } = harness({ toolResults: { "audio-wait": result } });
+    const response = await post("/api/songs/wait", { ids: ["first", "second"], until: "complete" });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), result);
+    assert.deepEqual(calls, [{ name: "audio-wait", args: { ids: ["first", "second"], until: "complete" } }]);
+  });
+
+  it("also accepts a single ID and defaults to waiting until playable", async () => {
+    const { post, calls } = harness();
+    assert.equal((await post("/api/songs/wait", { id: "first" })).status, 200);
+    assert.deepEqual(calls, [{ name: "audio-wait", args: { id: "first", until: "playable" } }]);
+  });
+
+  it("normalizes and deduplicates batch IDs before waiting", async () => {
+    const { post, calls } = harness();
+    assert.equal((await post("/api/songs/wait", { ids: [" first ", "first", "second"] })).status, 200);
+    assert.deepEqual(calls, [{ name: "audio-wait", args: { ids: ["first", "second"], until: "playable" } }]);
+  });
+
+  it("normalizes path IDs consistently and rejects whitespace-only IDs", async () => {
+    const { get, calls } = harness();
+    assert.equal((await get("/api/songs/%20first%20/wait")).status, 200);
+    assert.deepEqual(calls, [{ name: "audio-wait", args: { id: "first", until: "playable" } }]);
+    assert.equal((await get("/api/songs/%20/wait")).status, 400);
+    assert.equal(calls.length, 1);
+  });
+
+  it("rejects missing, conflicting, empty and oversized ID lists before calling Suno", async () => {
+    const { post, calls } = harness();
+    for (const body of [
+      {}, { ids: [] }, { id: "" }, { ids: [" "] },
+      { id: "first", ids: ["second"] }, { ids: ["1", "2", "3", "4", "5"] }
+    ]) {
+      assert.equal((await post("/api/songs/wait", body)).status, 400);
+    }
+    assert.equal(calls.length, 0);
+  });
+
+  it("requires authentication for batch waiting", async () => {
+    const { app, calls, url } = harness();
+    const response = await app.request(url("/api/songs/wait"), {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: ["first"] })
+    });
+    assert.equal(response.status, 401);
+    assert.equal(calls.length, 0);
+  });
+});
+
 describe("reference audio uploads", () => {
   it("starts and completes a manual upload session", async () => {
     const { post, calls } = harness();
@@ -168,6 +279,69 @@ describe("reference audio uploads", () => {
     const body = await res.json() as { clip_id: string; session_id: string };
     assert.equal(body.clip_id, "source-clip");
     assert.equal(body.session_id, "session-123");
+  });
+
+  it("completes multipart uploads when MCP upload results also contain media", async () => {
+    const media = { type: "resource_link", uri: "https://files.example.net/reference.wav", name: "reference.wav" };
+    for (const structured of [true, false]) {
+      const wrap = (payload: JsonValue) => simplifyToolResult({
+        ...(structured ? { structuredContent: { data: payload } } : {}),
+        content: [
+          { type: "text", text: JSON.stringify({ data: payload }) },
+          { type: "text", text: "Upload information is ready." },
+          media
+        ]
+      });
+      const completed = wrap({ clip: { id: "uploaded-clip", status: "processing" } });
+      const { app, uploaded, calls, url, auth } = harness({
+        toolResults: {
+          "audio-upload-create": wrap({ session_id: "media-session", clip_id: "source-clip", upload_url: "https://storage.example.net/upload" }),
+          "audio-upload-complete": completed
+        }
+      });
+      const form = new FormData();
+      form.set("file", new File([new Uint8Array([1, 2, 3])], "reference.wav", { type: "audio/wav" }));
+      const response = await app.request(url("/api/uploads/file"), { method: "POST", headers: auth, body: form });
+      assert.equal(response.status, 202);
+      assert.deepEqual(await response.json(), { session_id: "media-session", clip_id: "uploaded-clip", result: completed });
+      assert.equal(uploaded[0]?.url, "https://storage.example.net/upload");
+      assert.deepEqual(Array.from(uploaded[0].bytes), [1, 2, 3]);
+      assert.deepEqual(calls.at(-1), { name: "audio-upload-complete", args: { id: "media-session", title: "reference.wav" } });
+    }
+  });
+
+  it("forwards an attached file and returns the processing clip without proxying bytes", async () => {
+    const clip = { id: "attached-clip", status: "processing" };
+    const { post, calls, uploaded } = harness({ toolResults: { "audio-upload-create": clip } });
+    const body = {
+      title: "Reference",
+      file: { download_url: "https://files.example.net/reference.wav", file_id: "attachment-1", file_name: "reference.wav", mime_type: "audio/wav" }
+    };
+    const response = await post("/api/uploads/sessions", body);
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), clip);
+    assert.deepEqual(calls, [{ name: "audio-upload-create", args: body }]);
+    assert.equal(uploaded.length, 0);
+  });
+
+  it("validates attachment metadata and prevents passing file to upload completion", async () => {
+    const { post, calls } = harness();
+    assert.equal((await post("/api/uploads/sessions", { file: { download_url: "https://files.example.net/audio.wav" } })).status, 400);
+    assert.equal((await post("/api/uploads/sessions", { file: { download_url: 42, file_id: "attachment" } })).status, 400);
+    assert.equal((await post("/api/uploads/sessions", { file: { download_url: "https://files.example.net/audio.wav", file_id: null } })).status, 400);
+    assert.equal((await post("/api/uploads/session/complete", { file: { download_url: "https://files.example.net/audio.wav", file_id: "attachment" } })).status, 400);
+    assert.equal(calls.length, 0);
+  });
+
+  it("preserves attachment provider metadata without imposing extra string constraints", async () => {
+    const { post, calls } = harness();
+    const file = {
+      download_url: "provider:attachment",
+      file_id: "",
+      provider_metadata: { original_name: "reference.wav", expires_at: 1234567890 }
+    };
+    assert.equal((await post("/api/uploads/sessions", { file })).status, 202);
+    assert.deepEqual(calls, [{ name: "audio-upload-create", args: { file } }]);
   });
 
   it("rejects oversized uploads before touching Suno", async () => {

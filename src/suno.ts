@@ -36,7 +36,7 @@ async function createClient(): Promise<Client> {
     args: [remoteProxyPath, sunoMcpUrl],
     stderr: "inherit"
   });
-  const client = new Client({ name: "suno-rest-bridge", version: "0.2.0" });
+  const client = new Client({ name: "suno-rest-bridge", version: "0.3.0" });
   await client.connect(transport);
   return client;
 }
@@ -81,25 +81,41 @@ export async function listSunoTools(): Promise<SunoTool[]> {
   return tools;
 }
 
-function simplifyToolResult(result: {
+/**
+ * Decode a unique JSON payload from text-only MCP results. Preserve mixed-media
+ * content and any structured payload so audio, images and resources are not lost.
+ */
+export function simplifyToolResult(result: {
   isError?: boolean;
   structuredContent?: unknown;
   content?: Array<{ type: string; text?: string }>;
 }): JsonValue {
   const structured = result.structuredContent;
+  const content = result.content ?? [];
+  if (content.some((part) => part.type !== "text")) {
+    return {
+      ...(structured !== undefined ? { structuredContent: structured as JsonValue } : {}),
+      content
+    };
+  }
   if (structured !== undefined) return structured as JsonValue;
-  const textParts = result.content?.filter(
+  const textParts = content.filter(
     (part): part is { type: "text"; text: string } =>
       part.type === "text" && typeof part.text === "string"
-  ) ?? [];
-  if (textParts.length === 1) {
+  );
+  // Suno may append a second text block with guidance after its JSON payload.
+  // Intentionally omit that prose from text-only JSON responses; clip_ids is the REST contract.
+  const payloads: JsonValue[] = [];
+  for (const part of textParts) {
     try {
-      return JSON.parse(textParts[0].text) as JsonValue;
+      payloads.push(JSON.parse(part.text) as JsonValue);
     } catch {
-      return { text: textParts[0].text };
+      // Keep non-JSON text in the fallback response below.
     }
   }
-  return { content: result.content ?? [] };
+  if (payloads.length === 1) return payloads[0];
+  if (textParts.length === 1) return { text: textParts[0].text };
+  return { content };
 }
 
 export async function callSunoTool(

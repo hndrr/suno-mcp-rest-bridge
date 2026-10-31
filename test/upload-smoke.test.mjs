@@ -9,6 +9,31 @@ it('extracts signed upload session information', () => {
   assert.equal(getUploadedClipId({ id: 'clip-2' }), 'clip-2');
 });
 
+it('extracts upload metadata from mixed-media MCP envelopes', () => {
+  const media = { type: 'resource_link', uri: 'https://files.example.net/audio.wav', name: 'audio.wav' };
+  const session = { data: { session_id: 'media-session', clip_id: 'source-clip', upload_url: 'https://upload.example.net/' } };
+  const completed = { data: { clip: { id: 'completed-clip' } } };
+  for (const payload of [session, completed]) {
+    const content = [{ type: 'text', text: JSON.stringify(payload) }, media];
+    for (const result of [{ structuredContent: payload, content }, { content }]) {
+      if (payload === session) {
+        assert.deepEqual(getUploadSession(result), { sessionId: 'media-session', clipId: 'source-clip', uploadUrl: 'https://upload.example.net/' });
+      } else {
+        assert.equal(getUploadedClipId(result), 'completed-clip');
+      }
+    }
+  }
+});
+
+it('does not select an arbitrary upload payload from ambiguous JSON blocks', () => {
+  const content = [
+    { type: 'text', text: '{"id":"first","upload_url":"https://upload.example.net/first"}' },
+    { type: 'text', text: '{"id":"second","upload_url":"https://upload.example.net/second"}' }
+  ];
+  assert.throws(() => getUploadSession({ content }), BridgeError);
+  assert.equal(getUploadedClipId({ content }), undefined);
+});
+
 it('parses bounded multipart without an external dependency', async () => {
   const form = new FormData();
   form.set('file', new File([new Uint8Array([4,5,6])], 'test.wav', { type: 'audio/wav' }));

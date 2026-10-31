@@ -11,7 +11,9 @@ import {
   fullSongSchema,
   libraryQuerySchema,
   likedQuerySchema,
+  uploadCreateSchema,
   uploadSessionSchema,
+  waitBodySchema,
   waitQuerySchema
 } from "./schemas.js";
 import {
@@ -42,13 +44,22 @@ function normalizedToolName(name: string): string {
 function parse<S extends z.ZodType>(schema: S, value: unknown): z.output<S> {
   const result = schema.safeParse(value);
   if (!result.success) {
+    const issues = result.error.issues.map((issue) => ({
+      path: issue.path.map(String).join("."),
+      message: issue.message
+    }));
+    if (result.error.issues.some((issue) =>
+      issue.code === "unrecognized_keys" && issue.path.length === 0 && issue.keys.includes("clip_count")
+    )) {
+      issues.unshift({
+        path: "clip_count",
+        message: "Suno MCP no longer supports clip_count. Omit it; Suno determines the number of songs. Process every returned clip_ids entry."
+      });
+    }
     throw new BridgeError(
       400,
       "Invalid request",
-      result.error.issues.map((issue) => ({
-        path: issue.path.map(String).join("."),
-        message: issue.message
-      }))
+      issues
     );
   }
   return result.data;
@@ -70,10 +81,12 @@ function queryObject(c: Context): Record<string, string> {
 }
 
 function validId(id: string): string {
-  if (!id || id.length > 255) throw new BridgeError(400, "Invalid clip id");
-  return id;
+  const normalized = id.trim();
+  if (!normalized || normalized.length > 255) throw new BridgeError(400, "Invalid clip id");
+  return normalized;
 }
 
+/** Build the authenticated REST API with injectable MCP operations and upload limits. */
 export function createApp({
   apiKey,
   tools,
@@ -100,6 +113,9 @@ export function createApp({
       tools: "/api/tools",
       usage: "/api/usage",
       library: "/api/library"
+    },
+    operations: {
+      wait: { method: "POST", path: "/api/songs/wait" }
     }
   }));
   app.get("/health", (c) => c.json({ ok: true }));
@@ -134,6 +150,9 @@ export function createApp({
   app.post("/api/samples", async (c) =>
     c.json(await tools.callTool("audio-create", parse(createSampleSchema, await jsonBody(c))), 202)
   );
+  app.post("/api/songs/wait", async (c) =>
+    c.json(await tools.callTool("audio-wait", parse(waitBodySchema, await jsonBody(c))))
+  );
   app.get("/api/songs/:id", async (c) =>
     c.json(await tools.callTool("audio-retrieve", { id: validId(c.req.param("id")) }))
   );
@@ -144,10 +163,11 @@ export function createApp({
     }))
   );
 
-  // Creating a session is free; returns a one-hour signed upload URL.
-  app.post("/api/uploads/sessions", async (c) =>
-    c.json(await tools.callTool("audio-upload-create", parse(uploadSessionSchema, await jsonBody(c, true))), 201)
-  );
+  // Without a file this returns signed URLs; an attached file starts processing immediately.
+  app.post("/api/uploads/sessions", async (c) => {
+    const args = parse(uploadCreateSchema, await jsonBody(c, true));
+    return c.json(await tools.callTool("audio-upload-create", args), args.file ? 202 : 201);
+  });
   app.post("/api/uploads/:id/complete", async (c) =>
     c.json(await tools.callTool("audio-upload-complete", {
       id: validId(c.req.param("id")),
