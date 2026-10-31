@@ -1,11 +1,11 @@
 import type { JsonValue } from "./suno.js";
 
 export class BridgeError extends Error {
-  readonly status: 400 | 401 | 403 | 413 | 415 | 502;
+  readonly status: 400 | 401 | 402 | 403 | 413 | 415 | 502;
   readonly issues?: Array<{ path: string; message: string }>;
 
   constructor(
-    status: 400 | 401 | 403 | 413 | 415 | 502,
+    status: 400 | 401 | 402 | 403 | 413 | 415 | 502,
     message: string,
     issues?: Array<{ path: string; message: string }>
   ) {
@@ -16,7 +16,7 @@ export class BridgeError extends Error {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
@@ -24,9 +24,9 @@ function str(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-/** Read upload fields from direct JSON, data wrappers or preserved mixed-media MCP results. */
-function fields(result: JsonValue): Record<string, unknown> {
-  if (!isRecord(result)) throw new BridgeError(502, "Unexpected upload session response from Suno");
+/** Read fields from direct JSON, data wrappers or preserved mixed-media MCP results. */
+export function fields(result: JsonValue): Record<string, unknown> {
+  if (!isRecord(result)) throw new BridgeError(502, "Unexpected response from Suno");
   let payload: unknown = result.structuredContent;
   if (payload === undefined && Array.isArray(result.content)) {
     const candidates: unknown[] = [];
@@ -41,7 +41,7 @@ function fields(result: JsonValue): Record<string, unknown> {
     if (candidates.length === 1) payload = candidates[0];
   }
   if (payload === undefined) payload = result;
-  if (!isRecord(payload)) throw new BridgeError(502, "Unexpected upload session response from Suno");
+  if (!isRecord(payload)) throw new BridgeError(502, "Unexpected response from Suno");
   if (isRecord(payload.data)) return payload.data;
   return payload;
 }
