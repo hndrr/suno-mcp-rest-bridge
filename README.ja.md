@@ -98,7 +98,7 @@ curl -X POST http://127.0.0.1:8787/api/songs/SOURCE_CLIP_ID/cover \
 
 音声・画像・リソースを含むMCP応答は、元の `content` 配列と、存在する場合は `structuredContent` をまとめて返します。テキストだけの応答は、構造化データまたは単一のJSONデータを直接返し、補足の案内文は意図的に省略します。
 
-Sunoのツールがリクエストを拒否した場合は、`details` にSuno側のエラーを入れて返します。HTTPステータスは `details.code` で決まります。
+Sunoのツールがリクエストを拒否した場合は、`details` にSuno側のエラーを入れて返します。`details` は通常 `code` を持つオブジェクトですが、`null`、文字列、配列など任意のJSON値になることがあるので、`details.code` を読む前に型を確認してください。HTTPステータスはこのコードで決まります。
 
 | `details.code` | HTTPステータス |
 |---|---|
@@ -107,7 +107,7 @@ Sunoのツールがリクエストを拒否した場合は、`details` にSuno�
 | `forbidden`、`feature_not_on_plan` | 403 |
 | `not_found` | 404 |
 | `rate_limited`、`quota_exceeded` | 429 |
-| 上記以外、またはコードなし | 502 |
+| 上記以外、コードなし、または `details` がオブジェクトでない場合 | 502 |
 
 接続エラーも502を返しますが、`details` は含みません。以前はツールの拒否もすべて502だったので、502だけをSunoのエラーとして扱うクライアントは修正が必要です。
 
