@@ -308,8 +308,8 @@ The page has no authentication because a browser navigation can't send the Beare
 
 - **Treat these links as share links.** The embed player opens without signing in, **even for a private song**, so anyone who has the URL or the clip ID can listen.
 - **The embed page isn't part of Suno's MCP.** It may change or stop working without notice, and the bridge can't detect that. The rest of the API doesn't depend on it.
-- **It's for listening.** To get the file, use `/download`. The bridge doesn't extract audio from the embed page.
-- Playback was checked on finished songs only, not on a song that is still `streaming`.
+- **Wait for `complete` before listening.** `song_url` and `embed_url` appear once a song is `streaming`, but the embed player failed to play both times we tried at that stage, in a signed-out browser, and played once the same song was `complete`. So use `?wait=complete` for a link to open right away, or reopen a `?wait=playable` link after the song completes. Signed-in browsers weren't tested.
+- **It's for listening.** To get the file, use `/download`. The bridge doesn't extract audio from the embed page, and the file the player loads isn't a readable MP4: its data is encrypted or obfuscated.
 
 ## Important limitations and security
 
