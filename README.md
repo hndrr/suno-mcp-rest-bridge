@@ -12,6 +12,8 @@ An **unofficial, single-account local** REST adapter for Suno's **official MCP**
 
 Remove `clip_count` from existing requests: it now returns HTTP 400 with migration guidance. Suno chooses the number of generated songs, so a request can consume credits for multiple clips. Keep every returned `clip_ids` entry and wait for all of them with `POST /api/songs/wait`.
 
+Suno tool refusals used to return HTTP 502 in every case. They now return 4xx for the codes listed under [REST endpoints](#rest-endpoints), so update any client that treats only 502 as a Suno error.
+
 ## Setup
 
 ```bash
@@ -67,6 +69,19 @@ export API_KEY=YOUR_LOCAL_API_KEY
 MCP tool names may use hyphens or underscores; the adapter accepts both. The `ALLOWED_TOOLS` setting governs the **generic endpoint only**: dedicated routes above are available to an authorized caller independently. Inspect `/api/tools` for the list granted to your account.
 
 Text-only MCP responses expose their structured payload or a single decoded JSON payload directly; supplementary guidance prose is intentionally omitted from these JSON responses. When a response includes audio, images or resources, the bridge returns the original `content` array and any `structuredContent` field together so clients can retain every block. These are the [MCP tool result content types](https://modelcontextprotocol.io/specification/2025-06-18/server/tools#tool-result).
+
+When a Suno tool refuses a request, the response body is `{"error":"Suno MCP tool failed","details":{...}}`, with Suno's own error in `details`. The HTTP status follows `details.code`:
+
+| `details.code` | HTTP status |
+|---|---|
+| `invalid_request` | 400 |
+| `insufficient_credits` | 402 |
+| `forbidden`, `feature_not_on_plan` | 403 |
+| `not_found` | 404 |
+| `rate_limited`, `quota_exceeded` | 429 |
+| Any other or missing code | 502 |
+
+Connection failures also return 502, without `details`. Suno's MCP errors don't include an HTTP status, so a code missing from this table stays 502 even if Suno's documentation lists a different status for it; check `details.code` in that case.
 
 ## 1. Make a short sample (15 seconds)
 
