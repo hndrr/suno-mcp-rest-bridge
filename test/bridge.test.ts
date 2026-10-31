@@ -674,6 +674,34 @@ describe("generating and waiting in one request", () => {
     assert.equal(calls.some((call) => call.name === "audio-wait"), false);
   });
 
+  it("keeps a malformed creation result instead of failing after spending credits", async () => {
+    const created = { structuredContent: null, content: [{ type: "audio" }] };
+    const { post, calls } = harness({ toolResults: { "audio-create": created } });
+    const response = await post("/api/songs?wait=complete", { instrumental: true });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), {
+      created, clips: [], pending: [], timed_out: false,
+      wait_error: { error: "Suno returned no clip IDs to wait for" }
+    });
+    assert.equal(calls.some((call) => call.name === "audio-wait"), false);
+  });
+
+  it("keeps the created IDs when a wait result is malformed", async () => {
+    const { post, calls } = harness({
+      toolResults: {
+        "audio-create": { id: "a" },
+        "audio-wait": { structuredContent: null, content: [{ type: "audio" }] }
+      }
+    });
+    const response = await post("/api/songs?wait=complete", { instrumental: true });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), {
+      created: { id: "a" }, clips: [], pending: ["a"], timed_out: false,
+      wait_error: { error: "Unexpected response from Suno" }
+    });
+    assert.equal(calls.filter((call) => call.name === "audio-wait").length, 1);
+  });
+
   it("rejects an invalid wait query before spending credits", async () => {
     const { post, calls } = harness();
     for (const query of ["wait=done", "timeout=10", "wait=complete&timeout=0", "wait=complete&timeout=601", "wiat=complete"]) {
@@ -756,6 +784,31 @@ describe("waiting for many clips", () => {
     assert.equal(body.wait_error.details.code, "rate_limited");
   });
 
+  it("returns finished clips when another batch is malformed", async () => {
+    const { post } = harness({
+      toolResults: {
+        "audio-wait": (args) => (args.ids as string[]).includes("e")
+          ? { structuredContent: null, content: [{ type: "audio" }] }
+          : settle(args)
+      }
+    });
+    const response = await post("/api/songs/wait-all", { ids: ["a", "b", "c", "d", "e"] });
+    assert.equal(response.status, 202);
+    const body = await response.json() as { clips: unknown[]; pending: string[]; wait_error: unknown };
+    assert.equal(body.clips.length, 4);
+    assert.deepEqual(body.pending, ["e"]);
+    assert.deepEqual(body.wait_error, { error: "Unexpected response from Suno" });
+  });
+
+  it("returns 502 when the only wait result is malformed", async () => {
+    const { post } = harness({
+      toolResults: { "audio-wait": { structuredContent: null, content: [{ type: "audio" }] } }
+    });
+    const response = await post("/api/songs/wait-all", { ids: ["a"] });
+    assert.equal(response.status, 502);
+    assert.deepEqual(await response.json(), { error: "Unexpected response from Suno" });
+  });
+
   it("rejects empty and oversized lists", async () => {
     const { post, calls } = harness();
     assert.equal((await post("/api/songs/wait-all", { ids: [] })).status, 400);
@@ -794,6 +847,16 @@ describe("clip status events", () => {
     assert.deepEqual(events(await (await get("/api/songs/events?ids=a")).text()), [{
       event: "failed",
       data: { error: "Suno MCP tool failed", details: { error: "slow down", code: "rate_limited" } }
+    }]);
+  });
+
+  it("reports a malformed wait result as a failed event", async () => {
+    const { get } = harness({
+      toolResults: { "audio-wait": { structuredContent: null, content: [{ type: "audio" }] } }
+    });
+    assert.deepEqual(events(await (await get("/api/songs/events?ids=a")).text()), [{
+      event: "failed",
+      data: { error: "Unexpected response from Suno" }
     }]);
   });
 
