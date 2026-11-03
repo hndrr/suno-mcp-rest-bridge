@@ -16,6 +16,7 @@ const createSongFields = {
   style: z.string().min(1).max(1000).optional(),
   title: z.string().min(1).max(256).optional(),
   instrumental: z.boolean().optional(),
+  max_mode: z.boolean().optional(),
   duration: duration.optional(),
   duration_guidance: z.boolean().optional(),
   duration_strict: z.boolean().optional(),
@@ -91,6 +92,7 @@ export const createSampleSchema = z.object({
 const remixFields = {
   controls: controlsSchema.optional(),
   duration: duration.optional(),
+  max_mode: z.boolean().optional(),
   idempotency_key: idempotencyKey.optional(),
   lyrics: z.string().min(1).max(5000).optional(),
   model: z.string().min(1).optional(),
