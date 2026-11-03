@@ -131,6 +131,18 @@ curl -sS -X POST "$BASE/api/samples" \
   -d '{"lyrics":"[Instrumental]", "style":"bright synth pop, clean guitars", "instrumental":true, "duration":30}'
 ```
 
+### Max Mode
+
+Set the top-level `max_mode` field to `true` to enable Suno's Max Mode on song, sample, cover, extension or mashup requests. Suno describes this as an option for improving consistency in longer songs and keeping covers closer to the original; **it consumes more credits than standard generation**. See the [official v6 FAQ](https://help.suno.com/en/articles/13924481).
+
+```bash
+curl -sS -X POST "$BASE/api/songs" \
+  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -d '{"description":"Bright hi-fi pop with consistent female vocals", "max_mode":true}'
+```
+
+The field accepts JSON booleans only. Explicit `false` is forwarded unchanged; omitting it leaves the field out of the Suno request. It is independent of `controls` and does not change the duration or select a model. Availability and credit costs are determined by Suno.
+
 ## 2. Upload an audio reference
 
 ### One-request multipart convenience endpoint
@@ -335,6 +347,6 @@ The page has no authentication because a browser navigation can't send the Beare
 2. **Uploaded files are buffered only in RAM** up to `MAX_UPLOAD_MB`; no temp files are written. Single-request upload uses an HTTPS PUT and rejects redirects. It never forwards file bytes as the MCP tool JSON body.
 3. **Chargeable operations are not automatically retried.** Supply a unique `idempotency_key` to safely repeat the *same* generation request if the upstream request timed out; reusing a key with different parameters will fail.
 4. **Generation is asynchronous**: creation returns clip ID(s). Process every returned ID; `/api/songs/wait` accepts batches of up to four. Remixes require the source clip's status to be `complete`.
-5. No actual music generation, song download or OAuth login is triggered by `npm test`. Mock calls are checked against the official input-schema snapshot in `test/fixtures/suno-input-schemas.json`, retrieved on 2026-10-31. The snapshot does not replace live integration checks with the account you authorize. This project does not expose waveform editor, 5-second generator, or a server-side MP3 download proxy.
+5. No actual music generation, song download or OAuth login is triggered by `npm test`. Mock calls are checked against the official input-schema snapshot in `test/fixtures/suno-input-schemas.json`, retrieved on 2026-11-04 (Japan time). The snapshot does not replace live integration checks with the account you authorize. This project does not expose waveform editor, 5-second generator, or a server-side MP3 download proxy.
 
 Official references: [Suno MCP](https://suno.com/mcp) · [Suno MCP FAQ](https://help.suno.com/en/articles/14486145) · [MCP TypeScript SDK v2](https://ts.sdk.modelcontextprotocol.io/v2/) · [mcp-remote](https://github.com/punkpeye/mcp-remote)

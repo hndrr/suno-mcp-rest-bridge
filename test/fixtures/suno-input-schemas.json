@@ -1,6 +1,6 @@
 {
   "endpoint": "https://api.suno.com/mcp",
-  "retrieved_at": "2026-10-31T03:38:24.467Z",
+  "retrieved_at": "2026-11-03T18:04:56.771Z",
   "tools": [
     {
       "name": "account-me",
@@ -100,6 +100,9 @@
           },
           "workspace_id": {
             "type": "string"
+          },
+          "max_mode": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -189,6 +192,9 @@
           },
           "workspace_id": {
             "type": "string"
+          },
+          "max_mode": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false
@@ -312,6 +318,9 @@
           },
           "workspace_id": {
             "type": "string"
+          },
+          "max_mode": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -435,6 +444,9 @@
           },
           "workspace_id": {
             "type": "string"
+          },
+          "max_mode": {
+            "type": "boolean"
           }
         },
         "required": [
