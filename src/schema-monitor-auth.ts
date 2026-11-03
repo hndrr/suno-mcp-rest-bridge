@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import {
   Client, StreamableHTTPClientTransport,
-  type OAuthClientProvider, type StoredOAuthClientInformation, type StoredOAuthTokens
+  type OAuthClientProvider, type OAuthDiscoveryState, type StoredOAuthClientInformation, type StoredOAuthTokens
 } from "@modelcontextprotocol/client";
 import { z } from "zod";
 import type { SunoTool, JsonValue } from "./suno.js";
@@ -45,6 +45,7 @@ export function decodeSchemaAuthState(encoded: string): SchemaAuthState {
 export class SchemaMonitorAuth implements OAuthClientProvider {
   readonly oauthState = randomBytes(32).toString("base64url");
   private verifier = "";
+  private discovery?: OAuthDiscoveryState;
   private data: SchemaAuthState;
 
   constructor(
@@ -91,6 +92,9 @@ export class SchemaMonitorAuth implements OAuthClientProvider {
   }
   saveCodeVerifier(value: string) { this.verifier = value; }
   codeVerifier() { return this.verifier; }
+  // The setup's callback returns to the same process, just like the PKCE verifier.
+  saveDiscoveryState(value: OAuthDiscoveryState) { this.discovery = value; }
+  discoveryState() { return this.discovery; }
   invalidateCredentials() { this.reauthorize(); }
 
   private reauthorize(): never {
