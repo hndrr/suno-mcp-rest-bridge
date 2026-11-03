@@ -54,6 +54,19 @@ curl -X POST http://127.0.0.1:8787/api/songs/wait \
 
 IDの前後の空白は除去し、重複IDは1件にまとめてSunoへ送ります。1リクエストの上限は重複除去前の4件です。
 
+## Max Mode
+
+通常生成・サンプル・Cover・Extend・Mashupのリクエストに、トップレベルの `"max_mode":true` を指定できます。曲全体の声やスタイルの一貫性、Coverでの原曲の再現などを重視するオプションで、**通常より多くのクレジットを消費します**。[Suno公式の説明](https://help.suno.com/en/articles/13924481)も確認してください。
+
+```bash
+curl -X POST http://127.0.0.1:8787/api/songs \
+  -H 'Authorization: Bearer YOUR_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{"description":"Bright hi-fi pop with consistent female vocals", "max_mode":true}'
+```
+
+指定できるのはJSONの `true` / `false` です。文字列の `"true"` などは400になります。`false` はそのまま転送し、省略した場合はSunoにこの項目を送りません。`controls` の中には入れず、独立した項目として指定してください。曲の尺やモデルは自動変更せず、利用可否と消費クレジットはSuno側が決めます。
+
 ## 参照音源のアップロード
 
 ```bash
@@ -175,4 +188,4 @@ npm run setup:schema-monitor -- hndrr/suno-mcp-rest-bridge
 - アップロード後の参照生成は、元の音源が`complete`になる必要があります。
 - 指定した尺で曲が終わらず、途中で打ち切られる場合があります。
 - OAuthで利用できるMCPツールや機能はSuno側の権限・プランに依存します。
-- `npm test` は2026-10-31取得の公式入力スキーマに照らしてモックの引数を検査します。Suno認証や実際の楽曲生成は検証しません。
+- `npm test` は2026-11-04（日本時間）取得の公式入力スキーマに照らしてモックの引数を検査します。Suno認証や実際の楽曲生成は検証しません。

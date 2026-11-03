@@ -183,6 +183,57 @@ describe("authentication and generated samples", () => {
   });
 });
 
+describe("Max Mode", () => {
+  const requests: Array<[string, Record<string, unknown>, string]> = [
+    ["/api/songs", { description: "bright pop" }, "audio-create"],
+    ["/api/samples", { instrumental: true }, "audio-create"],
+    ["/api/songs/source/cover", {}, "audio-covers-create"],
+    ["/api/songs/source/extend", { continue_at: 1 }, "audio-extensions-create"],
+    ["/api/songs/source/mashup", { additional_audio_id: "second" }, "audio-mashups-create"]
+  ];
+
+  it("forwards explicit true and false to each supported Suno tool", async () => {
+    for (const [path, body, name] of requests) {
+      for (const max_mode of [true, false]) {
+        const { post, calls } = harness();
+        assert.equal((await post(path, { ...body, max_mode })).status, 202, path);
+        assert.equal(calls.length, 1, path);
+        assert.equal(calls[0].name, name, path);
+        assert.equal(calls[0].args.max_mode, max_mode, path);
+      }
+    }
+  });
+
+  it("leaves Max Mode out of upstream requests when it is omitted", async () => {
+    for (const [path, body] of requests) {
+      const { post, calls } = harness();
+      assert.equal((await post(path, body)).status, 202, path);
+      assert.equal(calls.length, 1, path);
+      assert.ok(!Object.hasOwn(calls[0].args, "max_mode"), path);
+    }
+  });
+
+  it("rejects non-boolean values before calling Suno", async () => {
+    const { post, calls } = harness();
+    for (const [path, body] of requests) {
+      for (const max_mode of ["true", "false", 0, 1, null, {}, []]) {
+        const response = await post(path, { ...body, max_mode });
+        assert.equal(response.status, 400, `${path}: ${JSON.stringify(max_mode)}`);
+        const error = await response.json() as { issues: Array<{ path: string }> };
+        assert.ok(error.issues.some((issue) => issue.path === "max_mode"), path);
+      }
+    }
+    assert.equal(calls.length, 0);
+  });
+
+  it("keeps Max Mode unavailable on tools whose schemas do not accept it", async () => {
+    const { post, calls } = harness();
+    assert.equal((await post("/api/speech", { script: "hello", max_mode: true })).status, 400);
+    assert.equal((await post("/api/songs/source/full-song", { max_mode: true })).status, 400);
+    assert.equal(calls.length, 0);
+  });
+});
+
 describe("reference-based generation", () => {
   it("covers a finished clip with duration and influence", async () => {
     const { post, calls } = harness();
