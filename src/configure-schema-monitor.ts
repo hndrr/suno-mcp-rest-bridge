@@ -15,7 +15,7 @@ if (!repository || !/^[\w.-]+\/[\w.-]+$/.test(repository)) {
   process.exit(1);
 }
 const actual = execFileSync("gh", ["repo", "view", repository, "--json", "nameWithOwner", "--jq", ".nameWithOwner"], { encoding: "utf8" }).trim();
-if (actual !== repository) throw new Error("The GitHub repository did not match the requested destination.");
+if (actual.toLowerCase() !== repository.toLowerCase()) throw new Error("The GitHub repository did not match the requested destination.");
 
 const directory = mkdtempSync(join(tmpdir(), "suno-schema-auth-"));
 const file = join(directory, "auth.json");

@@ -11,8 +11,9 @@ import { decryptSchemaAuth, encryptSchemaAuth, findAuthArtifact } from "../src/s
 
 const seed = (): SchemaAuthState => ({
   version: 1, generation: randomUUID(), redirectUrl: "http://127.0.0.1:12345/callback",
-  clientInformation: { client_id: "monitor-client" },
-  tokens: { access_token: "test-access", refresh_token: "test-refresh", token_type: "Bearer", scope: schemaMonitorScope }
+  clientInformation: { client_id: "monitor-client", issuer: "http://127.0.0.1:12346/oauth" },
+  tokens: { access_token: "test-access", refresh_token: "test-refresh", token_type: "Bearer", scope: schemaMonitorScope,
+    issuer: "http://127.0.0.1:12346/oauth" }
 });
 
 describe("schema monitor credentials", () => {
@@ -87,6 +88,38 @@ describe("schema monitor credentials", () => {
         env: { ...process.env, SUNO_SCHEMA_AUTH_FILE: file }, stdio: "pipe"
       }));
       assert.equal(readFileSync("test/fixtures/suno-input-schemas.json", "utf8"), before);
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it("binds the authorization callback to the discovered issuer before exchanging a code", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "schema-monitor-test-"));
+    const file = join(directory, "auth.json");
+    try {
+      writeFileSync(file, JSON.stringify({ ...seed(), tokens: undefined }));
+      let redirected = false;
+      let tokenRequests = 0;
+      const provider = new SchemaMonitorAuth(file, () => { redirected = true; });
+      const options = {
+        serverUrl: "http://127.0.0.1:12346/mcp",
+        fetchFn: async (input: string | URL | Request) => {
+          const url = new URL(input instanceof Request ? input.url : input.toString());
+          if (url.pathname.includes("oauth-protected-resource")) return Response.json({
+            resource: "http://127.0.0.1:12346/mcp", authorization_servers: ["http://127.0.0.1:12346/oauth"]
+          });
+          if (url.pathname.includes(".well-known")) return Response.json({
+            issuer: "http://127.0.0.1:12346/oauth", authorization_endpoint: "http://127.0.0.1:12346/authorize",
+            token_endpoint: "http://127.0.0.1:12346/token", response_types_supported: ["code"],
+            token_endpoint_auth_methods_supported: ["none"], code_challenge_methods_supported: ["S256"]
+          });
+          tokenRequests++;
+          throw new Error("The mismatched callback must be rejected before the token exchange.");
+        }
+      };
+      assert.equal(await auth(provider, options), "REDIRECT");
+      assert.ok(redirected);
+      assert.ok(provider.discoveryState());
+      await assert.rejects(auth(provider, { ...options, authorizationCode: "test-code", iss: "https://wrong-issuer.example" }));
+      assert.equal(tokenRequests, 0);
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 });
