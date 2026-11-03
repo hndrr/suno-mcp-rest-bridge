@@ -78,14 +78,14 @@ describe("schema monitor credentials", () => {
       await assert.rejects(new SchemaMonitorAuth(file).redirectToAuthorization(new URL("https://example.com")), /authorization expired/);
       writeFileSync(file, "test-private-credential-that-is-not-json");
       const result = spawnSync(process.execPath, ["--import=tsx", "src/check-schema.ts", "--json"], {
-        env: { ...process.env, SUNO_SCHEMA_AUTH_FILE: file }, encoding: "utf8"
+        env: { ...process.env, SUNO_SCHEMA_AUTH_FILE: file, GITHUB_STEP_SUMMARY: "", SUNO_SCHEMA_REPORT_DIR: "" }, encoding: "utf8"
       });
       assert.equal(result.status, 2);
       assert.equal(JSON.parse(result.stdout).status, "error");
       assert.ok(!`${result.stdout}${result.stderr}`.includes("test-private-credential"));
       const before = readFileSync("test/fixtures/suno-input-schemas.json", "utf8");
       assert.throws(() => execFileSync(process.execPath, ["--import=tsx", "src/check-schema.ts", "--update"], {
-        env: { ...process.env, SUNO_SCHEMA_AUTH_FILE: file }, stdio: "pipe"
+        env: { ...process.env, SUNO_SCHEMA_AUTH_FILE: file, GITHUB_STEP_SUMMARY: "", SUNO_SCHEMA_REPORT_DIR: "" }, stdio: "pipe"
       }));
       assert.equal(readFileSync("test/fixtures/suno-input-schemas.json", "utf8"), before);
     } finally { rmSync(directory, { recursive: true, force: true }); }
