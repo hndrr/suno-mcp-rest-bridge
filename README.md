@@ -288,7 +288,25 @@ If the answer is `requires_credit`, the download would spend a download credit. 
 npm run check:schema
 ```
 
-This compares the schemas Suno reports now with `test/fixtures/suno-input-schemas.json`, ignoring descriptions and spending no credits. It exits with 1 when a tool was removed or its schema changed. After updating the bridge's schemas, refresh the snapshot with `npm run check:schema -- --update`.
+This compares the schemas Suno reports now with `test/fixtures/suno-input-schemas.json`, ignoring descriptions and spending no credits. It exits with 1 when a tool was added, removed, or changed, and with 2 when the check could not run. After updating the bridge's schemas, refresh the snapshot with `npm run check:schema -- --update`.
+
+### Daily checks in GitHub Actions
+
+The **Suno MCP schema watch** workflow runs every day at **09:00 Japan time** (`0 0 * * *` UTC). It can also be started from the Actions tab with **Run workflow**. Scheduling begins when the workflow is on the default branch; GitHub may delay a scheduled run.
+
+Configure a separate OAuth connection for the monitor from your local checkout:
+
+```bash
+npm run setup:schema-monitor -- hndrr/suno-mcp-rest-bridge
+```
+
+This requires authenticated `gh` access to the repository and opens Suno's authorization page. It requests `api:v0 offline_access`, verifies `tools/list` and token refresh, and stores `SUNO_SCHEMA_AUTH` and `SUNO_SCHEMA_STATE_KEY` as Actions secrets. It uses a separate OAuth client from the local bridge. The setup command opens the browser automatically on macOS; on other systems, open the displayed URL on that same machine.
+
+The check only lists tool schemas. It does not generate music or update the baseline. Additions, removals, and schema changes fail the workflow and appear in its summary. The `suno-schema-report` artifact contains `report.json` and a normalized `live-schemas.json` for review. Connection and authorization errors fail separately; Actions notifications follow your GitHub notification settings.
+
+Refreshed OAuth credentials are saved in an **AES-256-GCM encrypted artifact**, using the key held in Actions secrets. The next scheduled or manual run restores the most recent state for the same authorization, including state saved after a schema-drift failure. Plaintext credentials stay in the runner's temporary directory and are removed at the end of the job. PR validation does not receive OAuth secrets. Encrypted state is retained for 90 days and reports for 30 days.
+
+If authorization expires, is revoked, or saved state has expired, run the setup command again and start a new workflow run. A new setup creates a new authorization generation so older state is ignored. GitHub may disable scheduled workflows in public repositories after 60 days without repository activity; re-enable the workflow in Actions if needed.
 
 ## 13. Listen without download credits
 

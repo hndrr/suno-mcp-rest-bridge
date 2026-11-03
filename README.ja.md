@@ -136,7 +136,25 @@ Sunoのツールがリクエストを拒否した場合は、`details` にSuno�
 - **クレジット上限:** `.env` の `MIN_CREDITS_REMAINING` を設定すると、残高がこの値を下回ったときに402を返して生成を止めます。残高を読めない場合は502で拒否します。
 - **冪等キーの必須化:** `REQUIRE_IDEMPOTENCY_KEY=true` にすると、`idempotency_key` のない生成リクエストに400を返します。
 - **ダウンロードの確認:** `requires_credit` が返ったら、ユーザーの承認を得てから `"confirm":true` で再度呼びます。ブリッジが自動で `confirm` を付けることはありません。
-- **スキーマ差分の確認:** `npm run check:schema` で、実際のツール定義と `test/fixtures/suno-input-schemas.json` を比べます。クレジットは消費しません。更新は `npm run check:schema -- --update` です。
+- **スキーマ差分の確認:** `npm run check:schema` で、実際のツール定義と `test/fixtures/suno-input-schemas.json` を比べます。追加・削除・変更で終了コード1、取得失敗で2を返します。クレジットは消費しません。更新は `npm run check:schema -- --update` です。
+
+### スキーマの定期チェック
+
+GitHub Actionsの **Suno MCP schema watch** が毎日 **日本時間9時** に確認します。Actions画面の **Run workflow** から手動実行もできます。定期実行はワークフローがデフォルトブランチに入ってから始まり、GitHub側で実行が遅れる場合があります。
+
+初回は、`gh` で対象リポジトリへアクセスできるMacで、次を実行します。
+
+```bash
+npm run setup:schema-monitor -- hndrr/suno-mcp-rest-bridge
+```
+
+ブラウザで監視専用のSuno接続を認可すると、ツール一覧の取得とトークン更新を確認し、認証情報と暗号化キーをGitHub ActionsのSecretsに登録します。ローカルのブリッジとは別のOAuth接続を使います。macOS以外では表示されたURLを同じマシンのブラウザで開いてください。
+
+ツールの追加・削除・スキーマ変更を検出すると実行が失敗し、サマリーに結果が出ます。`suno-schema-report` の `report.json` と `live-schemas.json` で差分を確認できます。接続・認証エラーはスキーマ変更と区別して記録します。通知はGitHub Actionsの通知設定に従います。楽曲生成や基準スキーマの自動更新は行いません。
+
+更新後のOAuth認証情報はAES-256-GCMで暗号化したArtifactに保存し、次回へ引き継ぎます。復号キーはSecretsに置き、平文の認証情報は実行終了時に削除します。PRの検証では認証情報を使いません。暗号化した認証情報は90日、比較結果は30日保存します。
+
+再認証が必要になった場合や保存期限を過ぎた場合は、初回のコマンドを再実行し、新しいワークフロー実行を開始してください。古い認証状態は引き継ぎません。公開リポジトリでは、60日間リポジトリの活動がないとGitHubが定期実行を停止する場合があります。その際はActions画面で再度有効にしてください。
 
 ## ダウンロードクレジットを使わずに聴く
 
