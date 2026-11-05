@@ -14,8 +14,13 @@ if (!repository || !/^[\w.-]+\/[\w.-]+$/.test(repository)) {
   console.error("Usage: npm run setup:schema-monitor -- OWNER/REPO");
   process.exit(1);
 }
-const actual = execFileSync("gh", ["repo", "view", repository, "--json", "nameWithOwner", "--jq", ".nameWithOwner"], { encoding: "utf8" }).trim();
-if (actual.toLowerCase() !== repository.toLowerCase()) throw new Error("The GitHub repository did not match the requested destination.");
+const destination = JSON.parse(execFileSync("gh", ["repo", "view", repository, "--json", "nameWithOwner,isPrivate"], {
+  encoding: "utf8"
+})) as { nameWithOwner: string; isPrivate: boolean };
+if (destination.nameWithOwner.toLowerCase() !== repository.toLowerCase()) {
+  throw new Error("The GitHub repository did not match the requested destination.");
+}
+if (!destination.isPrivate) throw new Error("Schema monitoring requires a private repository.");
 
 const directory = mkdtempSync(join(tmpdir(), "suno-schema-auth-"));
 const file = join(directory, "auth.json");

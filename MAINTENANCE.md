@@ -26,10 +26,4 @@ npm run check:schema -- --update
 
 ## 監視の再実行・再認証
 
-Actionsの **Suno MCP schema watch** で結果を確認し、手動実行は **Run workflow** を使う。
-
-認証エラーが出たら、次を実行して監視を再実行する。
-
-```bash
-npm run setup:schema-monitor -- hndrr/suno-mcp-rest-bridge
-```
+管理用リポジトリの運用メモに従って再実行・再認証する。
