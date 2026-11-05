@@ -1,6 +1,6 @@
 {
   "endpoint": "https://api.suno.com/mcp",
-  "retrieved_at": "2026-11-03T18:04:56.771Z",
+  "retrieved_at": "2026-11-05T11:13:02.835Z",
   "tools": [
     {
       "name": "account-me",
@@ -44,7 +44,7 @@
     {
       "name": "audio-covers-create",
       "inputSchema": {
-        "type": "object",
+        "additionalProperties": false,
         "properties": {
           "controls": {
             "properties": {
@@ -57,6 +57,11 @@
                 "maximum": 1,
                 "minimum": 0,
                 "type": "number"
+              },
+              "variety": {
+                "maximum": 4,
+                "minimum": 0,
+                "type": "integer"
               },
               "weirdness": {
                 "maximum": 1,
@@ -84,6 +89,9 @@
             "maxLength": 5000,
             "type": "string"
           },
+          "max_mode": {
+            "type": "boolean"
+          },
           "model": {
             "type": "string"
           },
@@ -95,26 +103,27 @@
             "maxLength": 1000,
             "type": "string"
           },
+          "title": {
+            "maxLength": 256,
+            "type": "string"
+          },
           "voice_id": {
             "type": "string"
           },
           "workspace_id": {
             "type": "string"
-          },
-          "max_mode": {
-            "type": "boolean"
           }
         },
         "required": [
           "id"
         ],
-        "additionalProperties": false
+        "type": "object"
       }
     },
     {
       "name": "audio-create",
       "inputSchema": {
-        "type": "object",
+        "additionalProperties": false,
         "properties": {
           "controls": {
             "properties": {
@@ -127,6 +136,11 @@
                 "maximum": 1,
                 "minimum": 0,
                 "type": "number"
+              },
+              "variety": {
+                "maximum": 4,
+                "minimum": 0,
+                "type": "integer"
               },
               "weirdness": {
                 "maximum": 1,
@@ -165,12 +179,23 @@
             "maxLength": 5000,
             "type": "string"
           },
+          "max_mode": {
+            "type": "boolean"
+          },
           "model": {
             "type": "string"
           },
           "negative_style": {
             "maxLength": 1000,
             "type": "string"
+          },
+          "reference_audio_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10,
+            "type": "array",
+            "uniqueItems": true
           },
           "style": {
             "maxLength": 1000,
@@ -192,12 +217,9 @@
           },
           "workspace_id": {
             "type": "string"
-          },
-          "max_mode": {
-            "type": "boolean"
           }
         },
-        "additionalProperties": false
+        "type": "object"
       }
     },
     {
@@ -251,7 +273,7 @@
     {
       "name": "audio-extensions-create",
       "inputSchema": {
-        "type": "object",
+        "additionalProperties": false,
         "properties": {
           "continue_at": {
             "minimum": 0.4,
@@ -268,6 +290,11 @@
                 "maximum": 1,
                 "minimum": 0,
                 "type": "number"
+              },
+              "variety": {
+                "maximum": 4,
+                "minimum": 0,
+                "type": "integer"
               },
               "weirdness": {
                 "maximum": 1,
@@ -298,6 +325,9 @@
             "maxLength": 5000,
             "type": "string"
           },
+          "max_mode": {
+            "type": "boolean"
+          },
           "model": {
             "type": "string"
           },
@@ -318,16 +348,13 @@
           },
           "workspace_id": {
             "type": "string"
-          },
-          "max_mode": {
-            "type": "boolean"
           }
         },
         "required": [
           "id",
           "continue_at"
         ],
-        "additionalProperties": false
+        "type": "object"
       }
     },
     {
@@ -354,7 +381,46 @@
     {
       "name": "audio-like",
       "inputSchema": {
-        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "dislike": {
+            "default": false,
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "audio-listen",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "question": {
+            "maxLength": 2000,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "question"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "audio-listen-wait",
+      "inputSchema": {
+        "additionalProperties": false,
         "properties": {
           "id": {
             "type": "string"
@@ -363,7 +429,7 @@
         "required": [
           "id"
         ],
-        "additionalProperties": false
+        "type": "object"
       }
     },
     {
@@ -384,7 +450,7 @@
     {
       "name": "audio-mashups-create",
       "inputSchema": {
-        "type": "object",
+        "additionalProperties": false,
         "properties": {
           "additional_audio_id": {
             "type": "string"
@@ -400,6 +466,11 @@
                 "maximum": 1,
                 "minimum": 0,
                 "type": "number"
+              },
+              "variety": {
+                "maximum": 4,
+                "minimum": 0,
+                "type": "integer"
               },
               "weirdness": {
                 "maximum": 1,
@@ -427,6 +498,9 @@
             "maxLength": 5000,
             "type": "string"
           },
+          "max_mode": {
+            "type": "boolean"
+          },
           "model": {
             "type": "string"
           },
@@ -444,16 +518,13 @@
           },
           "workspace_id": {
             "type": "string"
-          },
-          "max_mode": {
-            "type": "boolean"
           }
         },
         "required": [
           "id",
           "additional_audio_id"
         ],
-        "additionalProperties": false
+        "type": "object"
       }
     },
     {
@@ -801,6 +872,71 @@
           "clip_ids"
         ],
         "additionalProperties": false
+      }
+    },
+    {
+      "name": "sounds-create",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "maxLength": 500,
+            "minLength": 1,
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "key": {
+            "enum": [
+              "C",
+              "C#",
+              "D",
+              "D#",
+              "E",
+              "F",
+              "F#",
+              "G",
+              "G#",
+              "A",
+              "A#",
+              "B",
+              "Cm",
+              "C#m",
+              "Dm",
+              "D#m",
+              "Em",
+              "Fm",
+              "F#m",
+              "Gm",
+              "G#m",
+              "Am",
+              "A#m",
+              "Bm"
+            ],
+            "type": "string"
+          },
+          "loop": {
+            "default": false,
+            "type": "boolean"
+          },
+          "tempo": {
+            "maximum": 300,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "title": {
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "description"
+        ],
+        "type": "object"
       }
     },
     {
