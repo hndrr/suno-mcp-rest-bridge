@@ -12,6 +12,7 @@ import {
   createQuerySchema,
   createSampleSchema,
   createSongSchema,
+  createSoundSchema,
   createSpeechSchema,
   createWorkspaceSchema,
   defaultWaitSeconds,
@@ -20,7 +21,9 @@ import {
   eventsQuerySchema,
   fullSongSchema,
   libraryQuerySchema,
+  likeSchema,
   likedQuerySchema,
+  listenSchema,
   playlistClipsQuerySchema,
   playlistClipsSchema,
   playlistsQuerySchema,
@@ -69,9 +72,11 @@ const upstreamStatuses = new Map<string, 400 | 402 | 403 | 404 | 429>([
   ["insufficient_credits", 402],
   ["forbidden", 403],
   ["feature_not_on_plan", 403],
+  ["user_principal_required", 403],
   ["not_found", 404],
   ["rate_limited", 429],
-  ["quota_exceeded", 429]
+  ["quota_exceeded", 429],
+  ["concurrency_limit_exceeded", 429]
 ]);
 
 function upstreamStatus(details: unknown): 400 | 402 | 403 | 404 | 429 | 502 {
@@ -247,12 +252,15 @@ export function createApp({
       library: "/api/library",
       voices: "/api/voices",
       playlists: "/api/playlists",
-      workspaces: "/api/workspaces"
+      workspaces: "/api/workspaces",
+      sounds: "/api/sounds"
     },
     operations: {
       wait: { method: "POST", path: "/api/songs/wait" },
       waitAll: { method: "POST", path: "/api/songs/wait-all" },
-      events: { method: "GET", path: "/api/songs/events?ids=ID1,ID2" }
+      events: { method: "GET", path: "/api/songs/events?ids=ID1,ID2" },
+      listen: { method: "POST", path: "/api/songs/:id/listen" },
+      listenWait: { method: "GET", path: "/api/listens/:id/wait" }
     }
   }));
   app.get("/health", (c) => c.json({ ok: true }));
@@ -340,6 +348,12 @@ export function createApp({
   app.post("/api/speech", async (c) =>
     create(c, "speech-create", parse(createSpeechSchema, await jsonBody(c)))
   );
+  app.post("/api/sounds", async (c) =>
+    create(c, "sounds-create", parse(createSoundSchema, await jsonBody(c)))
+  );
+  app.get("/api/listens/:id/wait", async (c) =>
+    c.json(await callTool("audio-listen-wait", { id: validId(c.req.param("id")) }))
+  );
   app.post("/api/songs", async (c) =>
     create(c, "audio-create", parse(createSongSchema, await jsonBody(c)))
   );
@@ -401,6 +415,12 @@ export function createApp({
   app.get("/api/songs/:id/analysis", async (c) =>
     c.json(await callTool("audio-analysis", { id: validId(c.req.param("id")) }))
   );
+  app.post("/api/songs/:id/listen", async (c) =>
+    c.json(await callTool("audio-listen", {
+      ...parse(listenSchema, await jsonBody(c)),
+      id: validId(c.req.param("id"))
+    }), 202)
+  );
   app.get("/api/songs/:id/lyrics-alignment", async (c) =>
     c.json(await callTool("audio-lyrics-alignment", { id: validId(c.req.param("id")) }))
   );
@@ -412,7 +432,10 @@ export function createApp({
     }))
   );
   app.post("/api/songs/:id/like", async (c) =>
-    c.json(await callTool("audio-like", { id: validId(c.req.param("id")) }))
+    c.json(await callTool("audio-like", {
+      ...parse(likeSchema, await jsonBody(c, true)),
+      id: validId(c.req.param("id"))
+    }))
   );
   app.delete("/api/songs/:id/like", async (c) =>
     c.json(await callTool("audio-unlike", { id: validId(c.req.param("id")) }))

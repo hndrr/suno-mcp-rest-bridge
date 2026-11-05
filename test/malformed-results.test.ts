@@ -35,6 +35,11 @@ function toolResult(name: string, args: Record<string, unknown>): unknown {
     const shape = ids.map((id) => shapes[id]).find(Boolean);
     return shape ?? json({ clips: ids.map((id) => ({ id, status: "complete", error: null })) });
   }
+  if (name === "sounds-create") return json({ clip_ids: ["sound-1", "sound-2"], status: "submitted" });
+  if (name === "audio-listen") return json({ id: "listen-1", status: "processing" });
+  if (name === "audio-listen-wait") return json({
+    id: args.id, status: "complete", answer: 'Drums and piano.\n```json\n{"bpm":120}\n```'
+  });
   return json({});
 }
 
@@ -53,7 +58,8 @@ const fakeMcp = createServer(async (request, response) => {
   const result = method === "initialize"
     ? { protocolVersion: params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "fake", version: "1" } }
     : method === "tools/list"
-      ? { tools: ["audio-create", "audio-wait"].map((name) => ({ name, inputSchema: { type: "object" } })) }
+      ? { tools: ["audio-create", "audio-wait", "sounds-create", "audio-listen", "audio-listen-wait"]
+        .map((name) => ({ name, inputSchema: { type: "object" } })) }
       : method === "tools/call" ? toolResult(params.name, params.arguments ?? {}) : {};
   response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", id, result }));
 });
@@ -128,6 +134,29 @@ describe("malformed results over the real MCP transport", () => {
     assert.equal(response.status, 200);
     const body = await response.json() as { clips: Array<{ id: string }> };
     assert.deepEqual(body.clips.map((clip) => clip.id), ["good"]);
+  });
+
+  it("creates and waits for both sound effects over the real MCP transport", async () => {
+    const response = await fetch(`${base}/api/sounds?wait=complete`, {
+      method: "POST", headers, body: JSON.stringify({ description: "Rain" })
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json() as { created: { clip_ids: string[] }; clips: Array<{ id: string }> };
+    assert.deepEqual(body.created.clip_ids, ["sound-1", "sound-2"]);
+    assert.deepEqual(body.clips.map(({ id }) => id), ["sound-1", "sound-2"]);
+  });
+
+  it("preserves a listen answer and its fenced JSON through the MCP transport", async () => {
+    const submitted = await fetch(`${base}/api/songs/good/listen`, {
+      method: "POST", headers, body: JSON.stringify({ question: "What instruments and tempo?" })
+    });
+    assert.equal(submitted.status, 202);
+    const { id } = await submitted.json() as { id: string };
+    const response = await fetch(`${base}/api/listens/${id}/wait`, { headers });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      id: "listen-1", status: "complete", answer: 'Drums and piano.\n```json\n{"bpm":120}\n```'
+    });
   });
 
   it("keeps a creation result it can't read", async () => {

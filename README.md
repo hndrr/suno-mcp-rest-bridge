@@ -1,6 +1,6 @@
 # [WIP] Suno MCP → REST API bridge (TypeScript / Hono)
 
-An **unofficial, single-account local** REST adapter for Suno's **official MCP** endpoint at `https://api.suno.com/mcp`. Supports short samples, custom songs, speech, library search, source-audio uploads, covers, mashups, extensions, full-song joining, status polling and events, audio analysis, downloads, voices, playlists and workspaces. **No unofficial Suno scraper or third-party Suno API is involved.**
+An **unofficial, single-account local** REST adapter for Suno's **official MCP** endpoint at `https://api.suno.com/mcp`. Supports short samples, custom songs, speech, sound effects and loops, library search, source-audio uploads, covers, mashups, extensions, full-song joining, status polling and events, audio analysis and questions, downloads, voices, playlists and workspaces. **No unofficial Suno scraper or third-party Suno API is involved.**
 
 - **Node.js 22+**, TypeScript, Hono, maintained MCP TypeScript SDK v2 (`@modelcontextprotocol/client`)
 - `mcp-remote` handles Suno's browser-based OAuth; tokens are **not** the bridge's `API_KEY`
@@ -55,6 +55,7 @@ export API_KEY=YOUR_LOCAL_API_KEY
 | POST | `/api/songs` | `audio-create` | Generate audio; clip count follows Suno's defaults |
 | POST | `/api/samples` | `audio-create` | Generate **15–60s** samples, defaults to **15s** and strict duration |
 | POST | `/api/speech` | `speech-create` | Generate speech from a `script` or a `prompt`; always uses the default model |
+| POST | `/api/sounds` | `sounds-create` | Generate two sound effects, one-shots or loops |
 | POST | `/api/songs/wait` | `audio-wait` | Wait for one `id` or up to four `ids` |
 | POST | `/api/songs/wait-all` | `audio-wait` | Wait for up to 20 `ids`, repeating until they settle |
 | GET | `/api/songs/events?ids=ID1,ID2` | `audio-wait` | Server-Sent Events stream of clip status changes |
@@ -62,9 +63,11 @@ export API_KEY=YOUR_LOCAL_API_KEY
 | PATCH | `/api/songs/:id` | `audio-edit` | Change a song's `title` or `lyrics` |
 | GET | `/api/songs/:id/wait?until=playable` | `audio-wait` | Wait up to ~50 seconds until playable or complete |
 | GET | `/api/songs/:id/analysis` | `audio-analysis` | Tags, beats, tempo, key and sections; poll until `status` leaves `processing` |
+| POST | `/api/songs/:id/listen` | `audio-listen` | Ask a question about a finished clip; returns a listen ID |
+| GET | `/api/listens/:id/wait` | `audio-listen-wait` | Wait up to ~50 seconds for the answer, using the listen ID |
 | GET | `/api/songs/:id/lyrics-alignment` | `audio-lyrics-alignment` | Timing for each sung word; poll until `status` leaves `processing` |
 | POST | `/api/songs/:id/download` | `audio-download` | Get an MP3 or WAV URL; may spend a download credit |
-| POST, DELETE | `/api/songs/:id/like` | `audio-like`, `audio-unlike` | Like or unlike a song |
+| POST, DELETE | `/api/songs/:id/like` | `audio-like`, `audio-unlike` | Like or unlike a song; POST accepts `{"dislike":true}` for a dislike |
 | GET | `/api/library` | `library-list` or `library-search` | List/filter your library; `query=` searches title/style |
 | GET | `/api/library/liked` | `library-liked` | Songs you liked |
 | GET | `/api/voices` | `voices-list` | List your voices to use as `voice_id` |
@@ -92,9 +95,9 @@ When a Suno tool refuses a request, the response body is `{"error":"Suno MCP too
 |---|---|
 | `invalid_request` | 400 |
 | `insufficient_credits` | 402 |
-| `forbidden`, `feature_not_on_plan` | 403 |
+| `forbidden`, `feature_not_on_plan`, `user_principal_required` | 403 |
 | `not_found` | 404 |
-| `rate_limited`, `quota_exceeded` | 429 |
+| `rate_limited`, `quota_exceeded`, `concurrency_limit_exceeded` | 429 |
 | Any other or missing code, or `details` that isn't an object | 502 |
 
 Connection failures also return 502, without `details`. Suno's MCP errors don't include an HTTP status, so a code missing from this table stays 502 even if Suno's documentation lists a different status for it; check `details.code` in that case.
@@ -140,6 +143,22 @@ curl -sS -X POST "$BASE/api/songs" \
 ```
 
 The field accepts JSON booleans only. Explicit `false` is forwarded unchanged; omitting it leaves the field out of the Suno request. It is independent of `controls` and does not change the duration or select a model. Availability and credit costs are determined by Suno.
+
+### Variety and multiple references
+
+Song, sample, cover, mashup and extension requests accept `controls.variety`: an integer from **0 (Off), 1 (Normal), 2 (High), 3 (Extra) to 4 (Max)**. It controls how far Suno reinterprets the style tags. Omit it to use Suno's default. Variety does not itself require a paid feature for a suno.com sign-in.
+
+`POST /api/songs` and `/api/samples` also accept up to ten distinct `reference_audio_ids`:
+
+```json
+{
+  "description": "Chop the vocal hook from Sunrise into a lo-fi beat",
+  "reference_audio_ids": ["SOURCE_CLIP_ID"],
+  "controls": {"variety": 2}
+}
+```
+
+Use `description` to explain the remix, sampling, remastering or stem changes, referring to songs by title. References require Simple mode: no `lyrics`, `style` or `negative_style`, even with `instrumental: true`. The songs must be finished and owned by the signed-in user or available for them to remix. IDs are trimmed and duplicates rejected; permissions are checked by Suno.
 
 ## 2. Upload an audio reference
 
@@ -195,6 +214,8 @@ curl -sS -X POST "$BASE/api/songs/SOURCE_CLIP_ID/cover" \
 
 `audio_influence` (0–1) controls how closely the result follows the reference; it **requires an advanced-controls grant** on your Suno plan. Omit it if the server returns 403. **Important:** Cover does **not** carry over source lyrics: without explicit `lyrics` (or a `voice_id`), it creates an instrumental cover.
 
+An optional `title` (up to 256 characters) is forwarded, matching the current input schema. Suno's tool description still says covers inherit their source title, so whether a supplied title takes effect has not been verified.
+
 ## 4. Mash up two completed clips
 
 ```bash
@@ -244,7 +265,7 @@ Send one of the returned labels as `model` when you generate. The bridge checks 
 
 ## 8. Generate and wait in one request
 
-Add `?wait=playable` or `?wait=complete` to `/api/songs`, `/api/samples`, `/api/speech`, `/cover`, `/mashup` or `/extend`:
+Add `?wait=playable` or `?wait=complete` to `/api/songs`, `/api/samples`, `/api/speech`, `/api/sounds`, `/cover`, `/mashup` or `/extend`:
 
 ```bash
 curl -sS -X POST "$BASE/api/songs?wait=complete&timeout=300" \
@@ -277,7 +298,7 @@ The stream polls for this connection only. The bridge keeps no job state, so a r
 
 ## 10. Guard your credits
 
-Set these in `.env`; both apply to `/api/songs`, `/api/samples`, `/api/speech`, `/cover`, `/mashup` and `/extend`:
+Set these in `.env`; both apply to `/api/songs`, `/api/samples`, `/api/speech`, `/api/sounds`, `/cover`, `/mashup` and `/extend`:
 
 - `MIN_CREDITS_REMAINING`: returns 402 instead of generating when the balance is below this value. It reads the balance before each request and doesn't know what the request will cost, so the balance can still end up below the value. If the balance can't be read, the request is refused with 502. A retry with the same `idempotency_key` is refused too once the balance is too low.
 - `REQUIRE_IDEMPOTENCY_KEY=true`: returns 400 when a request has no `idempotency_key`, which protects against double charges when a client retries after a timeout.
@@ -312,6 +333,30 @@ The page has no authentication because a browser navigation can't send the Beare
 - **The embed page isn't part of Suno's MCP.** It may change or stop working without notice, and the bridge can't detect that. The rest of the API doesn't depend on it.
 - **Wait for `complete` before listening.** `song_url` and `embed_url` appear once a song is `streaming`, but the embed player failed to play both times we tried at that stage, in a signed-out browser, and played once the same song was `complete`. So use `?wait=complete` for a link to open right away, or reopen a `?wait=playable` link after the song completes. Signed-in browsers weren't tested.
 - **It's for listening.** To get the file, use `/download`. The bridge doesn't extract audio from the embed page, and the file the player loads isn't a readable MP4: its data is encrypted or obfuscated.
+
+## Ask about audio
+
+Ask about a finished clip's instruments, structure, mix, tempo or key:
+
+```bash
+curl -sS -X POST "$BASE/api/songs/CLIP_ID/listen" \
+  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -d '{"question":"Describe the instruments. End with a JSON block with bpm and key."}'
+
+curl -sS "$BASE/api/listens/LISTEN_ID/wait" -H "Authorization: Bearer $API_KEY"
+```
+
+The POST returns HTTP 202 with a listen ID. Use that returned ID, not the clip ID, in the wait URL. The wait returns HTTP 200 with Suno's status and answer; repeat it if `status` is still `processing`. Answers, including any requested JSON block, remain text in `answer`. This feature consumes no generation credits and requires a suno.com sign-in. Suno permits five unanswered questions at once and 200 questions per UTC day; answers remain readable for one day.
+
+## Generate sound effects and loops
+
+```bash
+curl -sS -X POST "$BASE/api/sounds?wait=complete" \
+  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -d '{"description":"Boom bap drums", "loop":true, "tempo":90, "key":"Am", "idempotency_key":"drums-001"}'
+```
+
+Requires a suno.com sign-in on Pro or higher. Suno generates two clips at one credit each. `description` is required (1–500 characters); optional fields are `loop`, integer `tempo` (1–300 BPM), `key`, `title` and `idempotency_key`. Keys use sharp notation, e.g. `C#` or `C#m`. Suno chooses the model and duration. The existing credit guards and generation-wait options apply, and every returned `clip_ids` entry is preserved. Without `?wait`, the response is HTTP 202; use the song retrieval and wait routes for each clip.
 
 ## Important limitations and security
 
