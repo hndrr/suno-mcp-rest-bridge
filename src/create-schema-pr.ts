@@ -38,7 +38,7 @@ const gh: GhCommand = (args, input) => execFileSync("gh", args, {
 });
 
 export function createSchemaPullRequest(
-  repository: string, reportDirectory: string, bodyFile: string, runUrl: string, runGh: GhCommand = gh
+  repository: string, reportDirectory: string, bodyFile: string, runUrl?: string, runGh: GhCommand = gh
 ): string | undefined {
   const report = z.object({
     status: z.enum(["changed", "unchanged", "error"]), checked_at: z.iso.datetime()
@@ -131,7 +131,8 @@ export function createSchemaPullRequest(
     "Review the bridge's request schemas and callers against the file diff before merging.",
     "Mark this draft ready for review to run validation. If GitHub shows an approval banner, select **Approve workflows to run**.",
     summary.split("\n").map((line) => `    ${line}`).join("\n"),
-    `Observed at ${report.checked_at}. [Schema check run](${runUrl}).`,
+    `Observed at ${report.checked_at}.`,
+    ...(runUrl ? [`[Schema check run](${runUrl}).`] : []),
     marker
   ].join("\n\n") + "\n", "utf8");
   const prs = JSON.parse(runGh([
@@ -153,11 +154,13 @@ export function createSchemaPullRequest(
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
-    const repository = process.env.GITHUB_REPOSITORY;
+    const repository = process.env.SUNO_SCHEMA_TARGET_REPOSITORY ?? process.env.GITHUB_REPOSITORY;
     const directory = process.env.SUNO_SCHEMA_REPORT_DIR;
     const body = process.env.SUNO_SCHEMA_PR_BODY;
     if (!repository || !directory || !body) throw new Error("Schema PR environment variables are missing.");
-    const runUrl = `${process.env.GITHUB_SERVER_URL}/${repository}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+    const runUrl = repository === process.env.GITHUB_REPOSITORY
+      ? `${process.env.GITHUB_SERVER_URL}/${repository}/actions/runs/${process.env.GITHUB_RUN_ID}`
+      : undefined;
     const url = createSchemaPullRequest(repository, directory, body, runUrl);
     if (url) {
       console.log(url);

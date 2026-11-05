@@ -17,6 +17,19 @@ const seed = (): SchemaAuthState => ({
 });
 
 describe("schema monitor credentials", () => {
+  it("rejects a public destination before starting OAuth or writing secrets", () => {
+    const directory = mkdtempSync(join(tmpdir(), "schema-monitor-destination-"));
+    try {
+      writeFileSync(join(directory, "gh"), `#!/usr/bin/env node\nconsole.log(JSON.stringify({ nameWithOwner: "owner/public", isPrivate: false }));\n`, { mode: 0o700 });
+      const result = spawnSync(process.execPath, ["--import=tsx", "src/configure-schema-monitor.ts", "owner/public"], {
+        env: { ...process.env, PATH: `${directory}:${process.env.PATH}` }, encoding: "utf8"
+      });
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /requires a private repository/);
+      assert.equal(result.stdout, "");
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
   it("encrypts credentials and rejects tampering, wrong keys, and another authorization generation", () => {
     const state = seed();
     const key = randomBytes(32).toString("base64");

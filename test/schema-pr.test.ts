@@ -26,7 +26,7 @@ function harness(t: { after: (fn: () => void) => void }) {
     base: "base-1", head: "", baseline: snapshot(), live: snapshot([tool("audio-create", 4), tool("sounds-create")]),
     status: "changed", checkedAt, commitCount: 0, prCreates: 0, prEdits: 0, draftChanges: 0,
     pr: undefined as { number: number; url: string; isDraft: boolean; body: string } | undefined,
-    badIdentity: "", failPrCreation: false, failPrEdit: false
+    badIdentity: "", failPrCreation: false, failPrEdit: false, includeRunLink: true
   };
   const gh = (args: string[], input?: string): string => {
     if (args[0] === "api") {
@@ -106,12 +106,22 @@ function harness(t: { after: (fn: () => void) => void }) {
     writeFileSync(join(directory, "report.json"), JSON.stringify({ status: state.status, checked_at: state.checkedAt }));
     writeFileSync(join(directory, "live-schemas.json"), JSON.stringify(state.live));
     return createSchemaPullRequest(repository, directory, bodyFile,
-      "https://github.com/hndrr/suno-mcp-rest-bridge/actions/runs/123", gh);
+      state.includeRunLink ? "https://github.com/hndrr/suno-mcp-rest-bridge/actions/runs/123" : undefined, gh);
   };
   return { state, run, commits, bodyFile };
 }
 
 describe("automatic schema review drafts", () => {
+  it("can publish a schema proposal without linking the private workflow", (t) => {
+    const { state, run, bodyFile } = harness(t);
+    state.includeRunLink = false;
+    assert.match(run()!, /\/pull\/12$/);
+    const body = readFileSync(bodyFile, "utf8");
+    assert.match(body, /Observed at/);
+    assert.ok(!body.includes("actions/runs"));
+    assert.ok(!body.includes("undefined"));
+  });
+
   it("creates a snapshot-only draft with field-level differences and the required commit identity", (t) => {
     const { state, run, commits, bodyFile } = harness(t);
     assert.match(run()!, /\/pull\/12$/);
