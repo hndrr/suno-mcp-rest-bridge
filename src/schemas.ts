@@ -7,11 +7,15 @@ const duration = z.number().int().min(15).max(360);
 export const controlsSchema = z.object({
   audio_influence: z.number().min(0).max(1).optional(),
   style_influence: z.number().min(0).max(1).optional(),
+  variety: z.number().int().min(0).max(4).optional(),
   weirdness: z.number().min(0).max(1).optional()
 }).strict();
 
 const createSongFields = {
   description: z.string().trim().min(1).max(3000).optional(),
+  reference_audio_ids: z.array(boundedId).max(10).refine((ids) => new Set(ids).size === ids.length, {
+    message: "reference_audio_ids must be unique"
+  }).optional(),
   lyrics: z.string().min(1).max(5000).optional(),
   style: z.string().min(1).max(1000).optional(),
   title: z.string().min(1).max(256).optional(),
@@ -31,6 +35,7 @@ const createSongFields = {
 
 type SongModeInput = {
   description?: string;
+  reference_audio_ids?: string[];
   lyrics?: string;
   style?: string;
   negative_style?: string;
@@ -46,6 +51,14 @@ type SongModeIssue = { path: string[]; message: string };
 
 function songModeIssues(song: SongModeInput): SongModeIssue[] {
   const issues: SongModeIssue[] = [];
+  if (song.reference_audio_ids?.length && (
+    !song.description || song.lyrics !== undefined || song.style !== undefined || song.negative_style !== undefined
+  )) {
+    issues.push({
+      path: ["reference_audio_ids"],
+      message: "Reference audio requires description in simple mode, without lyrics, style or negative_style"
+    });
+  }
   if (song.description && (
     song.style || song.negative_style || (song.lyrics && song.instrumental !== true)
   )) {
@@ -103,6 +116,7 @@ const remixFields = {
 
 export const createCoverSchema = z.object({
   ...remixFields,
+  title: z.string().min(1).max(256).optional(),
   voice_id: boundedId.optional()
 }).strict();
 
@@ -121,6 +135,26 @@ export const createExtensionSchema = z.object({
 }).strict();
 
 export const fullSongSchema = z.object({
+  idempotency_key: idempotencyKey.optional()
+}).strict();
+
+export const listenSchema = z.object({
+  question: z.string().trim().min(1).max(2000)
+}).strict();
+
+export const likeSchema = z.object({
+  dislike: z.boolean().optional()
+}).strict();
+
+export const createSoundSchema = z.object({
+  description: z.string().trim().min(1).max(500),
+  loop: z.boolean().optional(),
+  tempo: z.number().int().min(1).max(300).optional(),
+  key: z.enum([
+    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    "Cm", "C#m", "Dm", "D#m", "Em", "Fm", "F#m", "Gm", "G#m", "Am", "A#m", "Bm"
+  ]).optional(),
+  title: z.string().min(1).max(256).optional(),
   idempotency_key: idempotencyKey.optional()
 }).strict();
 
