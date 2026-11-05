@@ -279,6 +279,225 @@ describe("reference-based generation", () => {
   });
 });
 
+describe("additional generation controls", () => {
+  const requests: Array<[string, Record<string, unknown>]> = [
+    ["/api/songs", { lyrics: "hello", style: "pop" }],
+    ["/api/samples", { instrumental: true }],
+    ["/api/songs/source/cover", {}],
+    ["/api/songs/source/extend", { continue_at: 1 }],
+    ["/api/songs/source/mashup", { additional_audio_id: "second" }]
+  ];
+
+  it("accepts Variety's integer endpoints on every supported route", async () => {
+    for (const [path, body] of requests) {
+      for (const variety of [0, 4]) {
+        const { post, calls } = harness();
+        const controls = { variety, style_influence: 0.5 };
+        assert.equal((await post(path, { ...body, controls })).status, 202, path);
+        assert.deepEqual(calls.at(-1)?.args.controls, controls);
+      }
+    }
+  });
+
+  it("rejects invalid Variety values before any upstream call", async () => {
+    const { post, calls } = harness();
+    for (const [path, body] of requests) {
+      for (const variety of [-1, 5, 0.5, "2", true, null]) {
+        assert.equal((await post(path, { ...body, controls: { variety } })).status, 400, path);
+      }
+    }
+    assert.equal((await post("/api/speech", { script: "hello", controls: { variety: 1 } })).status, 400);
+    assert.equal(calls.length, 0);
+  });
+
+  it("accepts up to ten distinct references on songs and samples", async () => {
+    for (const path of ["/api/songs", "/api/samples"]) {
+      const { post, calls } = harness();
+      const ids = Array.from({ length: 10 }, (_, i) => `source-${i}`);
+      assert.equal((await post(path, {
+        description: "Remaster these songs", reference_audio_ids: ids.map((id) => ` ${id} `)
+      })).status, 202);
+      assert.deepEqual(calls.at(-1)?.args.reference_audio_ids, ids);
+    }
+  });
+
+  it("requires a simple-mode instruction for references, including instrumental requests", async () => {
+    const { post, calls } = harness();
+    const requests = [
+      { reference_audio_ids: ["source"], instrumental: true },
+      { reference_audio_ids: ["source"], lyrics: "hello" },
+      { description: "Remix it", reference_audio_ids: ["source"], lyrics: "hello", instrumental: true },
+      { description: "Remix it", reference_audio_ids: ["source"], style: "pop" },
+      { description: "Remix it", reference_audio_ids: ["source"], negative_style: "rock" }
+    ];
+    for (const path of ["/api/songs", "/api/samples"]) {
+      for (const body of requests) assert.equal((await post(path, body)).status, 400, JSON.stringify(body));
+    }
+    assert.equal(calls.length, 0);
+  });
+
+  it("rejects malformed, duplicate and oversized reference lists without silently dropping IDs", async () => {
+    const { post, calls } = harness();
+    for (const reference_audio_ids of [
+      "source", [1], [""], [" "], ["same", "same"], [" same ", "same"],
+      Array.from({ length: 11 }, (_, i) => `source-${i}`)
+    ]) {
+      assert.equal((await post("/api/songs", { description: "Remix it", reference_audio_ids })).status, 400);
+    }
+    assert.equal(calls.length, 0);
+    assert.equal((await post("/api/songs", { description: "Create a song", reference_audio_ids: [] })).status, 202);
+  });
+
+  it("forwards cover titles and validates their length", async () => {
+    const { post, calls } = harness();
+    const title = "a".repeat(256);
+    assert.equal((await post("/api/songs/source/cover", { title })).status, 202);
+    assert.deepEqual(calls, [{ name: "audio-covers-create", args: { id: "source", title } }]);
+    assert.equal((await post("/api/songs/source/cover", { title: "a".repeat(257) })).status, 400);
+    assert.equal(calls.length, 1);
+  });
+});
+
+describe("questions about audio and song feedback", () => {
+  it("uses the returned listen ID to read an answer without generation guards or audio waiting", async () => {
+    const pending = { id: "listen-1", status: "processing" };
+    const answer = { id: "listen-1", status: "complete", answer: 'The tempo is 120 BPM.\n```json\n{"bpm":120}\n```' };
+    const { post, get, calls } = harness({
+      toolResults: { "audio-listen": pending, "audio-listen-wait": answer },
+      options: { minCreditsRemaining: 999, requireIdempotencyKey: true }
+    });
+    const created = await post("/api/songs/clip-1/listen", { question: "What is the tempo?" });
+    assert.equal(created.status, 202);
+    assert.deepEqual(await created.json(), pending);
+    const result = await get(`/api/listens/${pending.id}/wait`);
+    assert.equal(result.status, 200);
+    assert.deepEqual(await result.json(), answer);
+    assert.deepEqual(calls, [
+      { name: "audio-listen", args: { id: "clip-1", question: "What is the tempo?" } },
+      { name: "audio-listen-wait", args: { id: "listen-1" } }
+    ]);
+  });
+
+  it("returns a still-processing answer so callers can wait again", async () => {
+    const pending = { id: "listen-1", status: "processing" };
+    const { get } = harness({ toolResults: { "audio-listen-wait": pending } });
+    assert.deepEqual(await (await get("/api/listens/listen-1/wait")).json(), pending);
+  });
+
+  it("validates question and path IDs before starting work", async () => {
+    const { post, get, calls } = harness();
+    for (const body of [{}, { question: " " }, { question: 1 }, { question: "a".repeat(2001) }, { question: "hi", id: "other" }]) {
+      assert.equal((await post("/api/songs/clip-1/listen", body)).status, 400);
+    }
+    assert.equal((await get("/api/listens/%20/wait")).status, 400);
+    assert.equal((await post("/api/songs/%20/listen", { question: "hi" })).status, 400);
+    assert.equal(calls.length, 0);
+    assert.equal((await post("/api/songs/clip-1/listen", { question: "a".repeat(2000) })).status, 202);
+  });
+
+  it("passes explicit feedback and preserves the existing empty-body like request", async () => {
+    const { post, send, calls } = harness();
+    for (const dislike of [true, false]) {
+      assert.equal((await post("/api/songs/clip-1/like", { dislike })).status, 200);
+      assert.deepEqual(calls.at(-1), { name: "audio-like", args: { id: "clip-1", dislike } });
+    }
+    assert.equal((await send("POST", "/api/songs/clip-1/like")).status, 200);
+    assert.deepEqual(calls.at(-1), { name: "audio-like", args: { id: "clip-1" } });
+    for (const body of [{ dislike: "true" }, { dislike: null }, { dislike: true, id: "other" }]) {
+      assert.equal((await post("/api/songs/clip-1/like", body)).status, 400);
+    }
+    assert.equal(calls.length, 3);
+  });
+
+  it("keeps listen quota and account errors as actionable HTTP statuses without retrying", async () => {
+    for (const [code, status] of [["concurrency_limit_exceeded", 429], ["quota_exceeded", 429], ["user_principal_required", 403]] as const) {
+      const details = { error: "refused", code };
+      const { post, calls } = harness({ toolResults: { "audio-listen": () => { throw new SunoToolError(details); } } });
+      const response = await post("/api/songs/clip-1/listen", { question: "What instruments?" });
+      assert.equal(response.status, status);
+      assert.deepEqual((await response.json() as { details: unknown }).details, details);
+      assert.equal(calls.length, 1);
+    }
+  });
+});
+
+describe("sound effects and loops", () => {
+  it("creates sounds with musical controls and preserves both returned clip IDs", async () => {
+    const result = { clip_ids: ["sound-1", "sound-2"], status: "submitted" };
+    const body = { description: "Boom bap drums", loop: true, tempo: 120, key: "Am", title: "Drums", idempotency_key: "sounds-1" };
+    const { post, calls } = harness({ toolResults: { "sounds-create": result } });
+    const response = await post("/api/sounds", body);
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), result);
+    assert.deepEqual(calls, [{ name: "sounds-create", args: body }]);
+  });
+
+  it("leaves optional generation settings to Suno and accepts tempo bounds", async () => {
+    const { post, calls } = harness();
+    assert.equal((await post("/api/sounds", { description: "Rain on a tin roof" })).status, 202);
+    assert.deepEqual(calls, [{ name: "sounds-create", args: { description: "Rain on a tin roof" } }]);
+    for (const tempo of [1, 300]) {
+      assert.equal((await post("/api/sounds", { description: "Drums", tempo, loop: false, key: "C#" })).status, 202);
+      assert.equal(calls.at(-1)?.args.tempo, tempo);
+    }
+  });
+
+  it("validates sound-specific inputs before spending credits", async () => {
+    const { post, calls } = harness();
+    const requests = [
+      {}, { description: " " }, { description: "a".repeat(501) },
+      ...[0, 301, 1.5, "120"].map((tempo) => ({ description: "Drums", tempo })),
+      { description: "Drums", loop: "true" }, { description: "Drums", key: "Db" },
+      { description: "Drums", title: "a".repeat(257) }, { description: "Drums", duration: 15 },
+      { description: "Drums", model: "v6" }, { description: "Drums", max_mode: true },
+      { description: "Drums", controls: { variety: 1 } }, { description: "Drums", idempotency_key: " " }
+    ];
+    for (const body of requests) assert.equal((await post("/api/sounds", body)).status, 400, JSON.stringify(body));
+    assert.equal(calls.length, 0);
+  });
+
+  it("applies credit and idempotency guards to sound creation", async () => {
+    const low = harness({ toolResults: { "account-usage": usage }, options: { minCreditsRemaining: 101 } });
+    assert.equal((await low.post("/api/sounds", { description: "Rain" })).status, 402);
+    assert.deepEqual(low.calls.map(({ name }) => name), ["account-usage"]);
+    const unread = harness({ toolResults: { "account-usage": {} }, options: { minCreditsRemaining: 1 } });
+    assert.equal((await unread.post("/api/sounds", { description: "Rain" })).status, 502);
+    assert.equal(unread.calls.some(({ name }) => name === "sounds-create"), false);
+    const required = harness({ options: { requireIdempotencyKey: true } });
+    assert.equal((await required.post("/api/sounds", { description: "Rain" })).status, 400);
+    assert.equal(required.calls.length, 0);
+    assert.equal((await required.post("/api/sounds", { description: "Rain", idempotency_key: "rain-1" })).status, 202);
+  });
+
+  it("waits for both sounds without generating twice", async () => {
+    const clips = [{ id: "sound-1", status: "complete" }, { id: "sound-2", status: "complete" }];
+    const { post, calls } = harness({ toolResults: {
+      "sounds-create": { clip_ids: ["sound-1", "sound-2"] }, "audio-wait": { clips }
+    } });
+    const response = await post("/api/sounds?wait=complete", { description: "Rain" });
+    assert.equal(response.status, 200);
+    assert.deepEqual((await response.json() as { clips: unknown }).clips, clips);
+    assert.deepEqual(calls.map(({ name }) => name), ["sounds-create", "audio-wait"]);
+    assert.deepEqual(calls.at(-1)?.args, { ids: ["sound-1", "sound-2"], until: "complete" });
+  });
+
+  it("requires authentication for every new route", async () => {
+    const { app, calls, url } = harness();
+    for (const [method, path, body] of [
+      ["POST", "/api/sounds", { description: "Rain" }],
+      ["POST", "/api/songs/clip-1/listen", { question: "What instruments?" }],
+      ["GET", "/api/listens/listen-1/wait", undefined]
+    ] as const) {
+      const response = await app.request(url(path), {
+        method, headers: { "Content-Type": "application/json" },
+        ...(body ? { body: JSON.stringify(body) } : {})
+      });
+      assert.equal(response.status, 401, path);
+    }
+    assert.equal(calls.length, 0);
+  });
+});
+
 describe("waiting for generated songs", () => {
   it("waits for all supplied IDs and preserves every clip in the response", async () => {
     const result = {
@@ -452,9 +671,11 @@ describe("upstream error statuses", () => {
       ["insufficient_credits", 402],
       ["forbidden", 403],
       ["feature_not_on_plan", 403],
+      ["user_principal_required", 403],
       ["not_found", 404],
       ["rate_limited", 429],
-      ["quota_exceeded", 429]
+      ["quota_exceeded", 429],
+      ["concurrency_limit_exceeded", 429]
     ];
     for (const [code, status] of statuses) {
       const details = { error: "refused", code, reason: "detail" };

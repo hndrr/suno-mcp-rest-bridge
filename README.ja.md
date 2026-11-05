@@ -64,6 +64,22 @@ curl -X POST http://127.0.0.1:8787/api/songs \
 
 指定できるのはJSONの `true` / `false` です。文字列の `"true"` などは400になります。`false` はそのまま転送し、省略した場合はSunoにこの項目を送りません。`controls` の中には入れず、独立した項目として指定してください。曲の尺やモデルは自動変更せず、利用可否と消費クレジットはSuno側が決めます。
 
+## Varietyと複数曲の参照
+
+通常生成・サンプル・Cover・Extend・Mashupでは、`controls.variety` に整数の **0（Off）・1（Normal）・2（High）・3（Extra）・4（Max）** を指定できます。スタイル指定をどこまで再解釈するかを調整する値で、省略時はSunoの既定値を使います。Max Modeとは別の設定で、suno.comへのログインではVariety自体に有料機能の権限は不要です。
+
+`POST /api/songs` と `/api/samples` は、最大10曲を `reference_audio_ids` で指定できます。
+
+```json
+{
+  "description": "Sunriseのボーカルを切り出してローファイのビートにして",
+  "reference_audio_ids": ["SOURCE_CLIP_ID"],
+  "controls": {"variety": 2}
+}
+```
+
+リミックス・サンプリング・リマスター・ステムの抽出や除去などの指示を `description` に書き、曲はタイトルで示します。Simpleモード専用のため、`instrumental:true` でも `lyrics`・`style`・`negative_style` は併用できません。参照する曲は完成済みで、自分の曲かリミックスが許可された曲に限ります。IDの前後の空白を除去し、重複は400で拒否します。曲の権限はSuno側が確認します。
+
 ## 参照音源のアップロード
 
 ```bash
@@ -87,6 +103,28 @@ curl -X POST http://127.0.0.1:8787/api/songs/SOURCE_CLIP_ID/cover \
 
 `audio_influence` は対応プランのみ利用可能です。Coverは元曲の歌詞を引き継ぎません。ボーカルを残したい場合は `lyrics` や `voice_id` を指定します。
 
+Coverの `title`（最大256文字）も転送します。ただし、Sunoの入力定義には存在する一方、説明文には元曲のタイトルを使うと残っており、指定したタイトルが反映されるかは未確認です。
+
+## 音源への質問
+
+`POST /api/songs/:id/listen` に `{"question":"楽器の構成を説明して。最後にbpmとkeyをJSONで示して"}` を送ります。完成済みの音源が対象で、202と質問の受付IDが返ります。
+
+その受付IDを `GET /api/listens/:id/wait` に指定して回答を待ちます。曲のIDではありません。応答は200で、`status` が `processing` なら同じ待機を繰り返します。回答やJSONブロックは `answer` の文字列として返り、ブリッジが自動解析することはありません。
+
+suno.comへのログインが必要で、生成クレジットは使いません。未回答の質問は同時に5件、1日200件（UTC基準）まで。回答を読める期間は1日です。
+
+## 効果音・ループ生成
+
+`POST /api/sounds` に、たとえば次を送ります。
+
+```json
+{"description":"Boom bap drums", "loop":true, "tempo":90, "key":"Am", "idempotency_key":"drums-001"}
+```
+
+suno.comのPro以上のプランが必要で、2個の音源を生成し、1個につき1クレジットを使います。`description` は1〜500文字。任意項目は `loop`、整数の `tempo`（1〜300 BPM）、`key`、`title`、`idempotency_key` です。キーは `C#`・`C#m` などシャープ表記を使い、モデルと尺はSunoに任せます。
+
+通常は202で、返却された `clip_ids` をすべて保持して既存の曲情報・待機APIを使います。`?wait=complete` も利用でき、既存の残高チェックと冪等キーの必須化も適用されます。
+
 ## その他のAPI
 
 | メソッド・パス | 内容 |
@@ -100,6 +138,7 @@ curl -X POST http://127.0.0.1:8787/api/songs/SOURCE_CLIP_ID/cover \
 | `GET /api/library/liked` | いいね済みの曲 |
 | `POST /api/songs` | 通常生成。曲数はSuno側の既定値 |
 | `POST /api/speech` | `script` または `prompt` から音声を生成。モデルは既定のみ |
+| `POST /api/sounds` | 効果音・ワンショット・ループを2個生成 |
 | `POST /api/songs/wait` | 1件の `id` または最大4件の `ids` を待機 |
 | `POST /api/songs/wait-all` | 最大20件の `ids` を、確定するまで繰り返し待機 |
 | `GET /api/songs/events?ids=ID1,ID2` | 曲の状態変化をServer-Sent Eventsで通知 |
@@ -107,9 +146,11 @@ curl -X POST http://127.0.0.1:8787/api/songs/SOURCE_CLIP_ID/cover \
 | `PATCH /api/songs/:id` | 曲の `title`・`lyrics` を変更 |
 | `GET /api/songs/:id/wait` | 再生可能まで待つ |
 | `GET /api/songs/:id/analysis` | タグ、拍、テンポ、キー、セクションの取得。`status` が `processing` でなくなるまで再取得 |
+| `POST /api/songs/:id/listen` | 完成済み音源に質問し、受付IDを取得 |
+| `GET /api/listens/:id/wait` | 質問の受付IDで回答を待機 |
 | `GET /api/songs/:id/lyrics-alignment` | 単語ごとのタイミング取得。`status` が `processing` でなくなるまで再取得 |
 | `POST /api/songs/:id/download` | MP3・WAVのURLを取得。ダウンロードクレジットを使う場合あり |
-| `POST`・`DELETE /api/songs/:id/like` | いいね・解除 |
+| `POST`・`DELETE /api/songs/:id/like` | いいね・解除。POSTに `{"dislike":true}` を渡すと低評価 |
 | `GET /api/voices` | `voice_id` に使えるボイスの一覧 |
 | `POST /api/voices/start` | ボイスを作成するsuno.comのURLを取得 |
 | `GET`・`POST /api/playlists` | プレイリストの一覧・作成 |
@@ -132,9 +173,9 @@ Sunoのツールがリクエストを拒否した場合は、`details` にSuno�
 |---|---|
 | `invalid_request` | 400 |
 | `insufficient_credits` | 402 |
-| `forbidden`、`feature_not_on_plan` | 403 |
+| `forbidden`、`feature_not_on_plan`、`user_principal_required` | 403 |
 | `not_found` | 404 |
-| `rate_limited`、`quota_exceeded` | 429 |
+| `rate_limited`、`quota_exceeded`、`concurrency_limit_exceeded` | 429 |
 | 上記以外、コードなし、または `details` がオブジェクトでない場合 | 502 |
 
 接続エラーも502を返しますが、`details` は含みません。以前はツールの拒否もすべて502だったので、502だけをSunoのエラーとして扱うクライアントは修正が必要です。
@@ -142,7 +183,7 @@ Sunoのツールがリクエストを拒否した場合は、`details` にSuno�
 ## 便利機能
 
 - **モデルの事前確認:** `model` がこのアカウントで使えない場合は、Sunoに送らず400を返します。クレジットは消費しません。
-- **生成して待つ:** `/api/songs`、`/api/samples`、`/api/speech`、`/cover`、`/mashup`、`/extend` に `?wait=playable` または `?wait=complete` を付けると、作成から待機までを1リクエストで行います。`timeout` は1〜600秒で、既定は300秒です。待機が失敗やタイムアウトになっても、作成済みの `created` と `pending` を202で返します。
+- **生成して待つ:** `/api/songs`、`/api/samples`、`/api/speech`、`/api/sounds`、`/cover`、`/mashup`、`/extend` に `?wait=playable` または `?wait=complete` を付けると、作成から待機までを1リクエストで行います。`timeout` は1〜600秒で、既定は300秒です。待機が失敗やタイムアウトになっても、作成済みの `created` と `pending` を202で返します。
 - **クレジット上限:** `.env` の `MIN_CREDITS_REMAINING` を設定すると、残高がこの値を下回ったときに402を返して生成を止めます。残高を読めない場合は502で拒否します。
 - **冪等キーの必須化:** `REQUIRE_IDEMPOTENCY_KEY=true` にすると、`idempotency_key` のない生成リクエストに400を返します。
 - **ダウンロードの確認:** `requires_credit` が返ったら、ユーザーの承認を得てから `"confirm":true` で再度呼びます。ブリッジが自動で `confirm` を付けることはありません。
