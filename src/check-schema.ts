@@ -10,6 +10,7 @@ const reportDirectory = process.env.SUNO_SCHEMA_REPORT_DIR;
 
 function report(value: Record<string, unknown>, summary: string) {
   if (json) console.log(JSON.stringify(value));
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `status=${value.status}\n`);
   if (reportDirectory) {
     mkdirSync(reportDirectory, { recursive: true });
     writeFileSync(join(reportDirectory, "report.json"), `${JSON.stringify(value, null, 2)}\n`);
