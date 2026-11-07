@@ -20,13 +20,15 @@ function harness(t: { after: (fn: () => void) => void }) {
   const directory = mkdtempSync(join(tmpdir(), "suno-schema-pr-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const bodyFile = join(directory, "body.md");
-  const commits = new Map<string, { parent: string; snapshot: ReturnType<typeof snapshot> }>();
+  const commits = new Map<string, {
+    parent: string; snapshot: ReturnType<typeof snapshot>; message: string; files?: string[]
+  }>();
   const trees = new Map<string, ReturnType<typeof snapshot>>();
   const state = {
     base: "base-1", head: "", baseline: snapshot(), live: snapshot([tool("audio-create", 4), tool("sounds-create")]),
     status: "changed", checkedAt, commitCount: 0, prCreates: 0, prEdits: 0, draftChanges: 0,
     pr: undefined as { number: number; url: string; isDraft: boolean; body: string } | undefined,
-    badIdentity: "", failPrCreation: false, failPrEdit: false, includeRunLink: true
+    badIdentity: "", failPrCreation: false, failPrEdit: false, includeRunLink: true, concurrentPush: false
   };
   const gh = (args: string[], input?: string): string => {
     if (args[0] === "api") {
@@ -44,10 +46,15 @@ function harness(t: { after: (fn: () => void) => void }) {
       }
       if (path.startsWith("git/commits/")) {
         const sha = path.slice("git/commits/".length);
-        return JSON.stringify({ sha, tree: { sha: `tree-${sha}` }, parents: [{ sha: commits.get(sha)?.parent }] });
+        const commit = commits.get(sha);
+        return JSON.stringify({ sha, message: commit?.message, tree: { sha: `tree-${sha}` }, parents: [{ sha: commit?.parent }] });
+      }
+      if (path.startsWith(`compare/${state.base}...`)) {
+        const sha = path.split("...")[1];
+        return JSON.stringify({ files: (commits.get(sha)?.files ?? [snapshotPath]).map((filename) => ({ filename })) });
       }
       if (path === "git/trees") {
-        assert.equal(data.base_tree, `tree-${state.base}`);
+        assert.equal(data.base_tree, `tree-${state.head || state.base}`);
         assert.equal(data.tree.length, 1);
         assert.equal(data.tree[0].path, snapshotPath);
         assert.equal(data.tree[0].mode, "100644");
@@ -59,17 +66,21 @@ function harness(t: { after: (fn: () => void) => void }) {
         assert.deepEqual(data.author, { name: "Codex", email: "codex@openai.com" });
         assert.deepEqual(data.committer, data.author);
         const sha = `commit-${++state.commitCount}`;
-        commits.set(sha, { parent: data.parents[0], snapshot: trees.get(data.tree)! });
+        commits.set(sha, { parent: data.parents[0], snapshot: trees.get(data.tree)!, message: data.message });
         return JSON.stringify({ ...data, sha,
           ...(state.badIdentity ? { [state.badIdentity]: { name: "Wrong", email: "wrong@example.com" } } : {})
         });
       }
       if (path === "git/refs" || path === `git/refs/heads/${branchRef.slice("refs/heads/".length)}`) {
         assert.ok(commits.has(data.sha));
-        assert.equal(commits.get(data.sha)!.parent, state.base);
+        assert.equal(commits.get(data.sha)!.parent, state.head || state.base);
         if (state.head) {
           assert.equal(args[args.indexOf("--method") + 1], "PATCH");
-          assert.equal(data.force, true);
+          assert.equal(data.force, false);
+          if (state.concurrentPush) {
+            state.head = "concurrent-developer-commit";
+            throw new Error("Reference update failed: not a fast forward");
+          }
         } else assert.equal(data.ref, branchRef);
         state.head = data.sha;
         return JSON.stringify({ object: { sha: state.head } });
@@ -147,8 +158,9 @@ describe("automatic schema review drafts", () => {
   });
 
   it("updates the existing PR and restores draft status when schemas change again", (t) => {
-    const { state, run } = harness(t);
+    const { state, run, commits } = harness(t);
     const url = run();
+    const firstHead = state.head;
     state.live = snapshot([tool("audio-create", 5)]);
     state.checkedAt = "2026-11-06T00:00:00.000Z";
     state.pr!.isDraft = false;
@@ -157,18 +169,64 @@ describe("automatic schema review drafts", () => {
     assert.equal(state.prCreates, 1);
     assert.equal(state.prEdits, 1);
     assert.equal(state.draftChanges, 1);
+    assert.equal(commits.get(state.head)!.parent, firstHead);
+    // An appended proposal is still the same proposal on the next run.
+    run();
+    assert.equal(state.commitCount, 2);
+    assert.equal(state.prEdits, 1);
   });
 
-  it("refreshes the branch against the latest default branch without changing the observation time", (t) => {
+  it("leaves the proposal history intact when the default branch advances", (t) => {
     const { state, run, commits } = harness(t);
     run();
     state.base = "base-2";
     state.checkedAt = "2026-11-06T00:00:00.000Z";
     run();
-    assert.equal(state.commitCount, 2);
-    assert.equal(state.prEdits, 1);
-    assert.equal(commits.get(state.head)!.parent, "base-2");
+    assert.equal(state.commitCount, 1);
+    assert.equal(state.prEdits, 0);
+    assert.equal(commits.get(state.head)!.parent, "base-1");
     assert.equal(commits.get(state.head)!.snapshot.retrieved_at, checkedAt);
+  });
+
+  it("preserves implementation commits and the reviewer's PR metadata", (t) => {
+    const { state, run, commits } = harness(t);
+    run();
+    const proposal = commits.get(state.head)!;
+    commits.set("developer-commit", { ...proposal, parent: state.head, message: "feat: support MIDI" });
+    state.head = "developer-commit";
+    state.pr!.isDraft = false;
+    state.pr!.body = "Implementation ready for review";
+    // Both repeated observations and newly changed schemas must leave this work alone.
+    assert.equal(run(), undefined);
+    state.live = snapshot([tool("audio-create", 5)]);
+    assert.equal(run(), undefined);
+    assert.equal(state.head, "developer-commit");
+    assert.equal(state.commitCount, 1);
+    assert.equal(state.prEdits, 0);
+    assert.equal(state.draftChanges, 0);
+    assert.equal(state.pr!.body, "Implementation ready for review");
+    assert.equal(state.pr!.isDraft, false);
+  });
+
+  it("preserves code changes even if the head uses the schema commit message", (t) => {
+    const { state, run, commits } = harness(t);
+    run();
+    commits.get(state.head)!.files = [snapshotPath, "src/app.ts"];
+    state.live = snapshot([tool("audio-create", 5)]);
+    assert.equal(run(), undefined);
+    assert.equal(state.commitCount, 1);
+    assert.equal(state.prEdits, 0);
+  });
+
+  it("rejects a refresh if a developer pushes after the branch was read", (t) => {
+    const { state, run } = harness(t);
+    run();
+    state.live = snapshot([tool("audio-create", 5)]);
+    state.concurrentPush = true;
+    assert.throws(run, /not a fast forward/);
+    assert.equal(state.head, "concurrent-developer-commit");
+    assert.equal(state.prEdits, 0);
+    assert.equal(state.draftChanges, 0);
   });
 
   it("skips errors, unchanged results, drift already merged, and reports older than the baseline", (t) => {

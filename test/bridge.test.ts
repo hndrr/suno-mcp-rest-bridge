@@ -525,7 +525,6 @@ describe("songs from MIDI scores", () => {
       { midi_upload_id: "score", lyrics: "Words", instrumental: true },
       { midi_upload_id: "score", style: "jazz" },
       { midi_upload_id: "score", negative_style: "polka" },
-      { midi_upload_id: "score", model: "v6" },
       { midi_upload_id: "score", reference_audio_ids: Array.from({ length: 10 }, (_, i) => `source-${i}`) }
     ];
     for (const path of ["/api/songs", "/api/samples"]) {
@@ -558,6 +557,17 @@ describe("songs from MIDI scores", () => {
     assert.equal((await post("/api/songs?wait=complete", { midi_upload_id: "score" })).status, 200);
     assert.deepEqual(calls.map(({ name }) => name), ["audio-create", "audio-wait"]);
     assert.deepEqual(calls[1].args, { ids: ["a", "b"], until: "complete" });
+  });
+
+  it("lets Suno decide MIDI compatibility for models available to the account", async () => {
+    const account = { ...usage, allowed_models: [...usage.allowed_models, "future-midi-model"] };
+    const { post, calls } = harness({ toolResults: { "account-usage": account } });
+    const body = { midi_upload_id: "score", model: "future-midi-model" };
+    assert.equal((await post("/api/songs", body)).status, 202);
+    assert.deepEqual(calls, [{ name: "account-usage", args: {} }, { name: "audio-create", args: body }]);
+    calls.length = 0;
+    assert.equal((await post("/api/songs", { ...body, model: "unavailable-model" })).status, 400);
+    assert.deepEqual(calls, [{ name: "account-usage", args: {} }]);
   });
 });
 

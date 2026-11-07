@@ -45,7 +45,6 @@ type SongModeInput = {
   negative_style?: string;
   instrumental?: boolean;
   midi_upload_id?: string;
-  model?: string;
   duration?: number;
   duration_guidance?: boolean;
   duration_strict?: boolean;
@@ -83,9 +82,8 @@ function songModeIssues(song: SongModeInput): SongModeIssue[] {
     if (song.lyrics !== undefined || song.style !== undefined || song.negative_style !== undefined) {
       issues.push({ path: ["midi_upload_id"], message: "MIDI requires simple mode, without lyrics, style or negative_style" });
     }
-    if (song.model !== undefined && song.model !== "v6-wild") {
-      issues.push({ path: ["model"], message: "MIDI requires v6-wild; omit model to use it automatically" });
-    }
+    // MIDI model compatibility lives in upstream prose, which schema monitoring ignores.
+    // Let Suno enforce it so newly supported account models are not rejected locally.
     if ((song.reference_audio_ids?.length ?? 0) >= 10) {
       issues.push({ path: ["reference_audio_ids"], message: "MIDI counts as one of the 10 reference inputs; provide at most 9 audio IDs" });
     }

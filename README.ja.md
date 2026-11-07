@@ -139,7 +139,7 @@ suno.comのPro以上のプランが必要で、2個の音源を生成し、1個�
 }
 ```
 
-MIDIのみでも生成でき、`description` は任意です。Simpleモード専用で、`lyrics`・`style`・`negative_style` は併用できません。`model` は省略時にSunoが `v6-wild` を選び、明示する場合も `v6-wild` に限ります。MIDIは参照10件のうち1件に数えるため、併用する `reference_audio_ids` は最大9件です。既存の残高・冪等キーの検査と `?wait=complete` なども使えます。著作権チェックが終わるまで曲は `queued` のままで、早期再生は始まりません。
+MIDIのみでも生成でき、`description` は任意です。Simpleモード専用で、`lyrics`・`style`・`negative_style` は併用できません。現在のSunoの説明では `model` は `v6-wild` に対応し、省略時もSunoが選びます。明示したモデルはアカウントで利用できるかを検査し、MIDIとの互換性はSunoが判断します。対応モデルが増えてもブリッジ側で拒否しません。MIDIは参照10件のうち1件に数えるため、併用する `reference_audio_ids` は最大9件です。既存の残高・冪等キーの検査と `?wait=complete` なども使えます。著作権チェックが終わるまで曲は `queued` のままで、早期再生は始まりません。`/api/samples` は通常どおり15秒・厳密な尺指定の既定値を転送しますが、MIDI生成でSunoがその尺を守るかは有料生成で未確認です。
 
 添付済みMIDIのメタデータがある場合は、セッション作成に `file: {"download_url":"…","file_id":"…"}` を渡せます。`file_name`・`mime_type` と添付元の追加メタデータも保持します。この場合はSunoが直接取得・検証し、完了済みアップロードを200で返すため、別途送信・完了通知は不要です。suno.comへのログインが必要です。
 
