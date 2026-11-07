@@ -19,7 +19,7 @@ type Identity = { name: string; email: string };
 type Commit = { sha: string; message: string; tree: { sha: string }; parents: { sha: string }[]; author: Identity; committer: Identity };
 type GhCommand = (args: string[], input?: string) => string;
 type Proposal = {
-  number: number; url: string; isDraft: boolean; headRefName: string;
+  number: number; url: string; isDraft: boolean; headRefName: string; isCrossRepository: boolean;
   state: "OPEN" | "CLOSED" | "MERGED";
 };
 
@@ -73,10 +73,10 @@ export function createSchemaPullRequest(
 
   const proposals = (JSON.parse(runGh([
     "pr", "list", "--repo", repository, "--base", repo.default_branch,
-    "--state", "all", "--limit", "1000", "--json", "number,url,isDraft,headRefName,state"
+    "--state", "all", "--limit", "1000", "--json", "number,url,isDraft,headRefName,isCrossRepository,state"
   ])) as Proposal[]).filter((pr) =>
-    pr.headRefName === branchPrefix || (pr.headRefName.startsWith(`${branchPrefix}-`) &&
-      /^\d+$/.test(pr.headRefName.slice(branchPrefix.length + 1)))
+    !pr.isCrossRepository && (pr.headRefName === branchPrefix || (pr.headRefName.startsWith(`${branchPrefix}-`) &&
+      /^\d+$/.test(pr.headRefName.slice(branchPrefix.length + 1))))
   );
   const open = proposals.find((pr) => pr.state === "OPEN");
   const lastClosed = proposals.filter((pr) => pr.state !== "OPEN").sort((a, b) => b.number - a.number)[0];

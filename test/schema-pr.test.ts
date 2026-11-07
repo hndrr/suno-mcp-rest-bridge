@@ -27,7 +27,7 @@ function harness(t: { after: (fn: () => void) => void }) {
   const trees = new Map<string, ReturnType<typeof snapshot>>();
   const heads = new Map<string, string>();
   type Proposal = {
-    number: number; url: string; isDraft: boolean; body: string; headRefName: string;
+    number: number; url: string; isDraft: boolean; body: string; headRefName: string; isCrossRepository: boolean;
     state: "OPEN" | "CLOSED" | "MERGED";
   };
   const state = {
@@ -36,6 +36,7 @@ function harness(t: { after: (fn: () => void) => void }) {
     status: "changed", checkedAt, commitCount: 0, prCreates: 0, prEdits: 0, draftChanges: 0,
     pr: undefined as Proposal | undefined,
     closedPrs: [] as Proposal[],
+    foreignPrs: [] as Proposal[],
     badIdentity: "", failPrCreation: false, failPrEdit: false, includeRunLink: true, concurrentPush: false
   };
   const gh = (args: string[], input?: string): string => {
@@ -100,7 +101,7 @@ function harness(t: { after: (fn: () => void) => void }) {
     }
     if (args[0] === "pr") {
       assert.equal(args[args.indexOf("--repo") + 1], repository);
-      if (args[1] === "list") return JSON.stringify([...(state.pr ? [state.pr] : []), ...state.closedPrs]);
+      if (args[1] === "list") return JSON.stringify([...(state.pr ? [state.pr] : []), ...state.closedPrs, ...state.foreignPrs]);
       if (args[1] === "view") {
         assert.equal(args[2], String(state.pr!.number));
         return JSON.stringify({ body: state.pr!.body });
@@ -113,7 +114,7 @@ function harness(t: { after: (fn: () => void) => void }) {
         if (state.pr) state.closedPrs.push(state.pr);
         const number = Math.max(11, ...state.closedPrs.map((pr) => pr.number)) + 1;
         state.pr = { number, url: `https://github.com/hndrr/suno-mcp-rest-bridge/pull/${number}`, isDraft: true,
-          body: readFileSync(bodyFile, "utf8"), state: "OPEN", headRefName: args[args.indexOf("--head") + 1] };
+          body: readFileSync(bodyFile, "utf8"), state: "OPEN", headRefName: args[args.indexOf("--head") + 1], isCrossRepository: false };
         return state.pr.url;
       }
       if (args[1] === "edit") {
@@ -141,6 +142,23 @@ function harness(t: { after: (fn: () => void) => void }) {
 }
 
 describe("automatic schema review drafts", () => {
+  it("ignores fork PRs with matching branch names without changing their metadata", (t) => {
+    for (const status of ["OPEN", "CLOSED", "MERGED"] as const) {
+      const { state, run } = harness(t);
+      const fork = {
+        number: 999, url: "https://github.com/hndrr/suno-mcp-rest-bridge/pull/999", isDraft: false,
+        body: "Fork contributor's description", headRefName: branchPrefix, state: status, isCrossRepository: true
+      };
+      state.foreignPrs.push(fork);
+      assert.match(run()!, /\/pull\/12$/);
+      assert.equal(state.pr!.headRefName, branchPrefix);
+      assert.equal(state.prEdits, 0);
+      assert.equal(state.draftChanges, 0);
+      assert.equal(fork.body, "Fork contributor's description");
+      assert.equal(fork.isDraft, false);
+    }
+  });
+
   it("can publish a schema proposal without linking the private workflow", (t) => {
     const { state, run, bodyFile } = harness(t);
     state.includeRunLink = false;
