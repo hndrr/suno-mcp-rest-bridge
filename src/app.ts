@@ -14,20 +14,24 @@ import {
   createSongSchema,
   createSoundSchema,
   createSpeechSchema,
+  createStemsSchema,
   createWorkspaceSchema,
   defaultWaitSeconds,
   downloadSchema,
   editSongSchema,
+  emptyBodySchema,
   eventsQuerySchema,
   fullSongSchema,
   libraryQuerySchema,
   likeSchema,
   likedQuerySchema,
   listenSchema,
+  midiUploadCreateSchema,
   playlistClipsQuerySchema,
   playlistClipsSchema,
   playlistsQuerySchema,
   previewQuerySchema,
+  songSettingsSchema,
   updateWorkspaceClipsSchema,
   uploadCreateSchema,
   uploadSessionSchema,
@@ -67,19 +71,22 @@ export type BridgeOptions = {
 type ChargeableArgs = Record<string, unknown> & { model?: string; idempotency_key?: string };
 
 // Suno MCP errors carry a string `code` but no HTTP status.
-const upstreamStatuses = new Map<string, 400 | 402 | 403 | 404 | 429>([
+const upstreamStatuses = new Map<string, 400 | 402 | 403 | 404 | 409 | 422 | 429>([
   ["invalid_request", 400],
   ["insufficient_credits", 402],
   ["forbidden", 403],
   ["feature_not_on_plan", 403],
   ["user_principal_required", 403],
   ["not_found", 404],
+  ["idempotency_key_reused", 409],
+  ["idempotency_in_progress", 409],
+  ["not_ready", 422],
   ["rate_limited", 429],
   ["quota_exceeded", 429],
   ["concurrency_limit_exceeded", 429]
 ]);
 
-function upstreamStatus(details: unknown): 400 | 402 | 403 | 404 | 429 | 502 {
+function upstreamStatus(details: unknown): 400 | 402 | 403 | 404 | 409 | 422 | 429 | 502 {
   if (details === null || typeof details !== "object" || !("code" in details)) return 502;
   return typeof details.code === "string" ? upstreamStatuses.get(details.code) ?? 502 : 502;
 }
@@ -190,8 +197,8 @@ export function createApp({
   const app = new Hono();
 
   // A guard that can't read the account refuses rather than spending credits unchecked.
-  const guardCharge = async ({ model, idempotency_key }: ChargeableArgs) => {
-    if (requireIdempotencyKey && !idempotency_key) {
+  const guardCharge = async ({ model, idempotency_key }: ChargeableArgs, supportsIdempotencyKey = true) => {
+    if (requireIdempotencyKey && supportsIdempotencyKey && !idempotency_key) {
       throw new BridgeError(400, "Invalid request", [{
         path: "idempotency_key",
         message: "REQUIRE_IDEMPOTENCY_KEY is on; send a unique idempotency_key"
@@ -253,14 +260,20 @@ export function createApp({
       voices: "/api/voices",
       playlists: "/api/playlists",
       workspaces: "/api/workspaces",
-      sounds: "/api/sounds"
+      sounds: "/api/sounds",
+      midiUploads: "/api/midi/uploads/sessions"
     },
     operations: {
       wait: { method: "POST", path: "/api/songs/wait" },
       waitAll: { method: "POST", path: "/api/songs/wait-all" },
       events: { method: "GET", path: "/api/songs/events?ids=ID1,ID2" },
       listen: { method: "POST", path: "/api/songs/:id/listen" },
-      listenWait: { method: "GET", path: "/api/listens/:id/wait" }
+      listenWait: { method: "GET", path: "/api/listens/:id/wait" },
+      midi: { method: "POST", path: "/api/songs/:id/midi" },
+      settings: { method: "PATCH", path: "/api/songs/:id/settings" },
+      stems: { method: "POST", path: "/api/songs/:id/stems" },
+      stemsRetrieve: { method: "GET", path: "/api/songs/:id/stems/:group_id" },
+      midiUploadComplete: { method: "POST", path: "/api/midi/uploads/:id/complete" }
     }
   }));
   app.get("/health", (c) => c.json({ ok: true }));
@@ -412,6 +425,31 @@ export function createApp({
       id: validId(c.req.param("id"))
     }))
   );
+  app.patch("/api/songs/:id/settings", async (c) =>
+    c.json(await callTool("audio-settings", {
+      ...parse(songSettingsSchema, await jsonBody(c)),
+      id: validId(c.req.param("id"))
+    }))
+  );
+  // This can start a paid transcription. Repeated calls for the same clip are cached by Suno.
+  app.post("/api/songs/:id/midi", async (c) => {
+    const id = validId(c.req.param("id"));
+    parse(emptyBodySchema, await jsonBody(c, true));
+    await guardCharge({}, false); // audio-midi has no idempotency_key argument.
+    return c.json(await callTool("audio-midi", { id }));
+  });
+  app.post("/api/songs/:id/stems", async (c) => {
+    const args = { ...parse(createStemsSchema, await jsonBody(c)), id: validId(c.req.param("id")) };
+    parse(emptyBodySchema, queryObject(c)); // Stem groups use their own retrieval route, not ?wait=.
+    await guardCharge(args);
+    return c.json(await callTool("audio-stems-create", args), 202);
+  });
+  app.get("/api/songs/:id/stems/:group_id", async (c) =>
+    c.json(await callTool("audio-stems-retrieve", {
+      id: validId(c.req.param("id")),
+      group_id: validId(c.req.param("group_id"))
+    }))
+  );
   app.get("/api/songs/:id/analysis", async (c) =>
     c.json(await callTool("audio-analysis", { id: validId(c.req.param("id")) }))
   );
@@ -458,6 +496,17 @@ export function createApp({
       ...parse(uploadSessionSchema, await jsonBody(c, true))
     }), 202)
   );
+
+  // MIDI storage uses a signed multipart POST, unlike the audio upload's raw PUT.
+  app.post("/api/midi/uploads/sessions", async (c) => {
+    const args = parse(midiUploadCreateSchema, await jsonBody(c, true));
+    return c.json(await callTool("midi-upload-create", args), args.file ? 200 : 201);
+  });
+  app.post("/api/midi/uploads/:id/complete", async (c) => {
+    const id = validId(c.req.param("id"));
+    parse(emptyBodySchema, await jsonBody(c, true));
+    return c.json(await callTool("midi-upload-complete", { id }));
+  });
 
   // Single-request convenience wrapper around Suno's three-step upload protocol.
   // No shared state or temp files: the audio is held in memory up to MAX_UPLOAD_MB.

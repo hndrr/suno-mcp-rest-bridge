@@ -498,7 +498,288 @@ describe("sound effects and loops", () => {
   });
 });
 
+describe("songs from MIDI scores", () => {
+  it("accepts a score alone and forwards its normalized ID without choosing a model", async () => {
+    const { post, calls } = harness();
+    assert.equal((await post("/api/songs", { midi_upload_id: " score-1 " })).status, 202);
+    assert.deepEqual(calls, [{ name: "audio-create", args: { midi_upload_id: "score-1" } }]);
+  });
+
+  it("supports MIDI on samples alongside nine audio references and an explicit model", async () => {
+    const { post, calls } = harness({ toolResults: { "account-usage": usage } });
+    const body = {
+      midi_upload_id: "score-1", description: "Play my melody as synthwave", model: "v6-wild",
+      reference_audio_ids: Array.from({ length: 9 }, (_, i) => `source-${i}`)
+    };
+    assert.equal((await post("/api/samples", body)).status, 202);
+    assert.deepEqual(calls, [
+      { name: "account-usage", args: {} },
+      { name: "audio-create", args: { ...body, duration: 15, duration_guidance: true, duration_strict: true } }
+    ]);
+  });
+
+  it("rejects incompatible MIDI inputs before any upstream call", async () => {
+    const { post, calls } = harness();
+    const bodies = [
+      { midi_upload_id: "" }, { midi_upload_id: " " }, { midi_upload_id: 1 }, { midi_upload_id: "a".repeat(256) },
+      { midi_upload_id: "score", lyrics: "Words", instrumental: true },
+      { midi_upload_id: "score", style: "jazz" },
+      { midi_upload_id: "score", negative_style: "polka" },
+      { midi_upload_id: "score", reference_audio_ids: Array.from({ length: 10 }, (_, i) => `source-${i}`) }
+    ];
+    for (const path of ["/api/songs", "/api/samples"]) {
+      for (const body of bodies) assert.equal((await post(path, body)).status, 400, JSON.stringify(body));
+    }
+    for (const [path, body] of [
+      ["/api/songs/source/cover", {}],
+      ["/api/songs/source/extend", { continue_at: 1 }],
+      ["/api/songs/source/mashup", { additional_audio_id: "other" }],
+      ["/api/speech", { script: "hello" }],
+      ["/api/sounds", { description: "drums" }]
+    ] as const) {
+      assert.equal((await post(path, { ...body, midi_upload_id: "score" })).status, 400, path);
+    }
+    assert.equal(calls.length, 0);
+  });
+
+  it("keeps generation guards and waiting on MIDI requests", async () => {
+    const required = harness({ options: { requireIdempotencyKey: true } });
+    assert.equal((await required.post("/api/songs", { midi_upload_id: "score" })).status, 400);
+    assert.equal(required.calls.length, 0);
+    const low = harness({ toolResults: { "account-usage": usage }, options: { minCreditsRemaining: 101 } });
+    assert.equal((await low.post("/api/songs", { midi_upload_id: "score" })).status, 402);
+    assert.equal(low.calls.some(({ name }) => name === "audio-create"), false);
+
+    const { post, calls } = harness({ toolResults: {
+      "audio-create": { clip_ids: ["a", "b"] },
+      "audio-wait": { clips: [{ id: "a", status: "complete" }, { id: "b", status: "complete" }] }
+    } });
+    assert.equal((await post("/api/songs?wait=complete", { midi_upload_id: "score" })).status, 200);
+    assert.deepEqual(calls.map(({ name }) => name), ["audio-create", "audio-wait"]);
+    assert.deepEqual(calls[1].args, { ids: ["a", "b"], until: "complete" });
+  });
+
+  it("lets Suno decide MIDI compatibility for models available to the account", async () => {
+    const account = { ...usage, allowed_models: [...usage.allowed_models, "future-midi-model"] };
+    const { post, calls } = harness({ toolResults: { "account-usage": account } });
+    const body = { midi_upload_id: "score", model: "future-midi-model" };
+    assert.equal((await post("/api/songs", body)).status, 202);
+    assert.deepEqual(calls, [{ name: "account-usage", args: {} }, { name: "audio-create", args: body }]);
+    calls.length = 0;
+    assert.equal((await post("/api/songs", { ...body, model: "unavailable-model" })).status, 400);
+    assert.deepEqual(calls, [{ name: "account-usage", args: {} }]);
+  });
+});
+
+describe("song captions and settings", () => {
+  it("edits or clears a caption alone or alongside title and lyrics", async () => {
+    const { send, calls } = harness();
+    for (const body of [{ caption: "a".repeat(500) }, { caption: "" }, { title: "New", lyrics: "Words", caption: "About this song" }]) {
+      assert.equal((await send("PATCH", "/api/songs/%20song%20", body)).status, 200);
+      assert.deepEqual(calls.at(-1), { name: "audio-edit", args: { ...body, id: "song" } });
+    }
+  });
+
+  it("changes only the requested settings and preserves false", async () => {
+    const { send, calls } = harness();
+    for (const body of [
+      { visibility: "public" }, { visibility: "private" }, { can_remix: false }, { can_remix: true },
+      { visibility: "private", can_remix: false }
+    ]) {
+      assert.equal((await send("PATCH", "/api/songs/%20song%20/settings", body)).status, 200);
+      assert.deepEqual(calls.at(-1), { name: "audio-settings", args: { ...body, id: "song" } });
+    }
+  });
+
+  it("rejects invalid edits and settings before modifying a song", async () => {
+    const { send, calls } = harness();
+    for (const body of [{}, { caption: 1 }, { caption: null }, { caption: "a".repeat(501) }, { caption: "hi", id: "other" }]) {
+      assert.equal((await send("PATCH", "/api/songs/song", body)).status, 400);
+    }
+    for (const body of [{}, { visibility: "unlisted" }, { can_remix: "false" }, { can_remix: null }, { title: "New" }, { can_remix: false, id: "other" }]) {
+      assert.equal((await send("PATCH", "/api/songs/song/settings", body)).status, 400);
+    }
+    assert.equal((await send("PATCH", "/api/songs/%20/settings", { visibility: "public" })).status, 400);
+    assert.equal(calls.length, 0);
+  });
+
+  it("preserves pending publication and upstream partial-change details", async () => {
+    const pending = { visibility: "private", publish_pending: true, can_remix: false };
+    const success = harness({ toolResults: { "audio-settings": pending } });
+    assert.deepEqual(await (await success.send("PATCH", "/api/songs/song/settings", { visibility: "public" })).json(), pending);
+    const details = { code: "forbidden", error: "Cannot publish", can_remix: false };
+    const failure = harness({ toolResults: { "audio-settings": () => { throw new SunoToolError(details); } } });
+    const response = await failure.send("PATCH", "/api/songs/song/settings", { visibility: "public", can_remix: false });
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), { error: "Suno MCP tool failed", details });
+    assert.equal(failure.calls.length, 1);
+  });
+});
+
+describe("stem separation and MIDI transcription", () => {
+  it("creates a stem group and retrieves all its takes without another creation", async () => {
+    const created = { id: "group-1", status: "pending" };
+    const group = {
+      ...created, status: "partial",
+      stems: Array.from({ length: 24 }, (_, i) => ({ audio_id: `stem-${i}`, take: i < 12 ? 1 : 2, status: i === 23 ? "error" : "complete" }))
+    };
+    const { post, get, calls } = harness({ toolResults: { "audio-stems-create": created, "audio-stems-retrieve": group } });
+    const response = await post("/api/songs/%20song%20/stems", { mode: "twelve", idempotency_key: "stems-1" });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), created);
+    assert.deepEqual(await (await get("/api/songs/song/stems/%20group-1%20")).json(), group);
+    assert.deepEqual(calls, [
+      { name: "audio-stems-create", args: { id: "song", mode: "twelve", idempotency_key: "stems-1" } },
+      { name: "audio-stems-retrieve", args: { id: "song", group_id: "group-1" } }
+    ]);
+    assert.equal((await post("/api/songs/song/stems", { mode: "two" })).status, 202);
+  });
+
+  it("checks stem credits and required idempotency keys before starting a split", async () => {
+    const low = harness({ toolResults: { "account-usage": usage }, options: { minCreditsRemaining: 101 } });
+    assert.equal((await low.post("/api/songs/song/stems", { mode: "two" })).status, 402);
+    assert.deepEqual(low.calls, [{ name: "account-usage", args: {} }]);
+    const unread = harness({ toolResults: { "account-usage": {} }, options: { minCreditsRemaining: 1 } });
+    assert.equal((await unread.post("/api/songs/song/stems", { mode: "two" })).status, 502);
+    assert.equal(unread.calls.some(({ name }) => name === "audio-stems-create"), false);
+    const required = harness({ options: { requireIdempotencyKey: true } });
+    assert.equal((await required.post("/api/songs/song/stems", { mode: "two" })).status, 400);
+    assert.equal(required.calls.length, 0);
+    assert.equal((await required.post("/api/songs/song/stems", { mode: "two", idempotency_key: "split-1" })).status, 202);
+  });
+
+  it("starts and polls transcription by POST, preserving MIDI download resources", async () => {
+    const result = {
+      structuredContent: { status: "ok", url: "https://files.example.net/song.mid", instruments: [{ name: "Piano", notes: 20 }] },
+      content: [{ type: "resource_link", name: "song.mid", uri: "https://files.example.net/song.mid" }]
+    };
+    let round = 0;
+    const { send, calls } = harness({
+      toolResults: { "audio-midi": () => ++round === 1 ? { status: "processing" } : result },
+      options: { requireIdempotencyKey: true }
+    });
+    const first = await send("POST", "/api/songs/%20song%20/midi");
+    assert.equal(first.status, 200);
+    assert.deepEqual(await first.json(), { status: "processing" });
+    assert.deepEqual(await (await send("POST", "/api/songs/song/midi", {})).json(), result);
+    assert.deepEqual(calls, [
+      { name: "audio-midi", args: { id: "song" } }, { name: "audio-midi", args: { id: "song" } }
+    ]);
+  });
+
+  it("checks the credit floor before a transcription", async () => {
+    for (const [account, status] of [[usage, 402], [{}, 502]] as const) {
+      const { post, calls } = harness({ toolResults: { "account-usage": account }, options: { minCreditsRemaining: 101 } });
+      assert.equal((await post("/api/songs/song/midi", {})).status, status);
+      assert.deepEqual(calls, [{ name: "account-usage", args: {} }]);
+    }
+  });
+
+  it("rejects invalid modes, IDs, transcription bodies and unsupported waiting before a charge", async () => {
+    const { post, get, calls } = harness();
+    for (const body of [{}, { mode: "four" }, { mode: 2 }, { mode: "two", idempotency_key: " " }, { mode: "two", id: "other" }]) {
+      assert.equal((await post("/api/songs/song/stems", body)).status, 400);
+    }
+    assert.equal((await post("/api/songs/song/stems?wait=complete", { mode: "two" })).status, 400);
+    assert.equal((await post("/api/songs/%20/stems", { mode: "two" })).status, 400);
+    assert.equal((await get("/api/songs/song/stems/%20")).status, 400);
+    assert.equal((await get("/api/songs/%20/stems/group")).status, 400);
+    for (const body of [{ id: "other" }, { confirm: true }, { idempotency_key: "midi-1" }]) {
+      assert.equal((await post("/api/songs/song/midi", body)).status, 400);
+    }
+    assert.equal((await post("/api/songs/%20/midi", {})).status, 400);
+    assert.equal(calls.length, 0);
+  });
+
+  it("returns new upstream error statuses and never retries paid calls", async () => {
+    for (const [path, tool, body, code, status] of [
+      ["/api/songs/song/midi", "audio-midi", {}, "not_ready", 422],
+      ["/api/songs/song/stems", "audio-stems-create", { mode: "two" }, "idempotency_in_progress", 409],
+      ["/api/songs/song/stems", "audio-stems-create", { mode: "two" }, "idempotency_key_reused", 409]
+    ] as const) {
+      const details = { error: "Try again later", code };
+      const { post, calls } = harness({ toolResults: { [tool]: () => { throw new SunoToolError(details); } } });
+      const response = await post(path, body);
+      assert.equal(response.status, status);
+      assert.deepEqual(await response.json(), { error: "Suno MCP tool failed", details });
+      assert.equal(calls.length, 1);
+    }
+  });
+});
+
+describe("MIDI uploads", () => {
+  it("returns signed POST fields unchanged, then completes with the upload ID", async () => {
+    const session = { midi_upload_id: "score-1", upload_url: "https://storage.example.net/midi", upload_fields: { key: "score-1", policy: "signed-policy" } };
+    const completed = { midi_upload_id: "score-1", status: "complete" };
+    const { send, calls, uploaded } = harness({ toolResults: { "midi-upload-create": session, "midi-upload-complete": completed } });
+    const response = await send("POST", "/api/midi/uploads/sessions");
+    assert.equal(response.status, 201);
+    assert.deepEqual(await response.json(), session);
+    const done = await send("POST", "/api/midi/uploads/%20score-1%20/complete");
+    assert.equal(done.status, 200);
+    assert.deepEqual(await done.json(), completed);
+    assert.deepEqual(calls, [
+      { name: "midi-upload-create", args: {} }, { name: "midi-upload-complete", args: { id: "score-1" } }
+    ]);
+    assert.equal(uploaded.length, 0);
+  });
+
+  it("forwards attachment metadata and returns a completed MIDI upload directly", async () => {
+    const file = {
+      download_url: "provider:score", file_id: "attachment-1", file_name: "score.mid", mime_type: "audio/midi",
+      provider_metadata: { expires_at: 1234567890 }
+    };
+    const completed = { midi_upload_id: "score-1" };
+    const { post, calls, uploaded } = harness({ toolResults: { "midi-upload-create": completed } });
+    const response = await post("/api/midi/uploads/sessions", { file });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), completed);
+    assert.deepEqual(calls, [{ name: "midi-upload-create", args: { file } }]);
+    assert.equal(uploaded.length, 0);
+  });
+
+  it("validates metadata and prevents audio upload fields from leaking to MIDI tools", async () => {
+    const { post, calls } = harness();
+    for (const body of [
+      { title: "Score" }, { file: {} }, { file: null }, { file: { download_url: "https://files.example.net/score.mid" } },
+      { file: { download_url: 42, file_id: "attachment" } },
+      { file: { download_url: "provider:score", file_id: "attachment", file_name: 1 } }
+    ]) {
+      assert.equal((await post("/api/midi/uploads/sessions", body)).status, 400);
+    }
+    for (const body of [{ title: "Score" }, { file: {} }, { id: "other" }]) {
+      assert.equal((await post("/api/midi/uploads/score-1/complete", body)).status, 400);
+    }
+    assert.equal((await post("/api/midi/uploads/%20/complete", {})).status, 400);
+    assert.equal(calls.length, 0);
+  });
+});
+
+describe("new schema routes require authentication", () => {
+  it("rejects unauthorized requests before contacting Suno", async () => {
+    const { app, calls, url } = harness();
+    for (const [method, path] of [
+      ["PATCH", "/api/songs/song/settings"], ["POST", "/api/songs/song/midi"],
+      ["POST", "/api/songs/song/stems"], ["GET", "/api/songs/song/stems/group"],
+      ["POST", "/api/midi/uploads/sessions"], ["POST", "/api/midi/uploads/score/complete"]
+    ]) {
+      assert.equal((await app.request(url(path), { method })).status, 401, path);
+    }
+    assert.equal(calls.length, 0);
+  });
+});
+
 describe("waiting for generated songs", () => {
+  it("accepts the upstream limit of twelve IDs in a single call", async () => {
+    const ids = Array.from({ length: 12 }, (_, i) => `clip-${i}`);
+    const result = { clips: ids.map((id) => ({ id, status: "complete" })) };
+    const { post, calls } = harness({ toolResults: { "audio-wait": result } });
+    const response = await post("/api/songs/wait", { ids, until: "complete" });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), result);
+    assert.deepEqual(calls, [{ name: "audio-wait", args: { ids, until: "complete" } }]);
+  });
+
   it("waits for all supplied IDs and preserves every clip in the response", async () => {
     const result = {
       id: "first", status: "complete",
@@ -535,7 +816,7 @@ describe("waiting for generated songs", () => {
     const { post, calls } = harness();
     for (const body of [
       {}, { ids: [] }, { id: "" }, { ids: [" "] },
-      { id: "first", ids: ["second"] }, { ids: ["1", "2", "3", "4", "5"] }
+      { id: "first", ids: ["second"] }, { ids: Array.from({ length: 13 }, (_, i) => `${i}`) }
     ]) {
       assert.equal((await post("/api/songs/wait", body)).status, 400);
     }
@@ -673,6 +954,9 @@ describe("upstream error statuses", () => {
       ["feature_not_on_plan", 403],
       ["user_principal_required", 403],
       ["not_found", 404],
+      ["idempotency_key_reused", 409],
+      ["idempotency_in_progress", 409],
+      ["not_ready", 422],
       ["rate_limited", 429],
       ["quota_exceeded", 429],
       ["concurrency_limit_exceeded", 429]
@@ -991,17 +1275,17 @@ describe("waiting for many clips", () => {
     clips: (args.ids as string[]).map((id) => clip(id, "complete"))
   });
 
-  it("splits the IDs into batches of four and deduplicates them", async () => {
+  it("splits the IDs into batches of twelve and deduplicates them", async () => {
     const { post, calls } = harness({ toolResults: { "audio-wait": settle } });
-    const ids = ["a", "b", "c", "d", "e", "f", "a"];
-    const response = await post("/api/songs/wait-all", { ids, until: "complete" });
+    const ids = Array.from({ length: 19 }, (_, i) => `clip-${i}`);
+    const response = await post("/api/songs/wait-all", { ids: [...ids, ids[0]], until: "complete" });
     assert.equal(response.status, 200);
     assert.deepEqual(calls.map((call) => call.args), [
-      { ids: ["a", "b", "c", "d"], until: "complete" },
-      { ids: ["e", "f"], until: "complete" }
+      { ids: ids.slice(0, 12), until: "complete" },
+      { ids: ids.slice(12), until: "complete" }
     ]);
     const body = await response.json() as { clips: Array<{ id: string }>; pending: string[]; timed_out: boolean };
-    assert.deepEqual(body.clips.map((item) => item.id).sort(), ["a", "b", "c", "d", "e", "f"]);
+    assert.deepEqual(body.clips.map((item) => item.id), ids);
     assert.deepEqual(body.pending, []);
     assert.equal(body.timed_out, false);
   });
@@ -1042,33 +1326,35 @@ describe("waiting for many clips", () => {
   });
 
   it("returns finished clips when another batch fails", async () => {
+    const ids = Array.from({ length: 13 }, (_, i) => `clip-${i}`);
     const { post } = harness({
       toolResults: {
         "audio-wait": (args) => {
-          if ((args.ids as string[]).includes("e")) throw new SunoToolError({ error: "slow down", code: "rate_limited" });
+          if ((args.ids as string[]).includes(ids[12])) throw new SunoToolError({ error: "slow down", code: "rate_limited" });
           return settle(args);
         }
       }
     });
-    const response = await post("/api/songs/wait-all", { ids: ["a", "b", "c", "d", "e"] });
+    const response = await post("/api/songs/wait-all", { ids });
     assert.equal(response.status, 202);
     const body = await response.json() as { clips: unknown[]; pending: string[]; wait_error: { details: { code: string } } };
-    assert.equal(body.clips.length, 4);
-    assert.deepEqual(body.pending, ["e"]);
+    assert.equal(body.clips.length, 12);
+    assert.deepEqual(body.pending, [ids[12]]);
     assert.equal(body.wait_error.details.code, "rate_limited");
   });
 
   it("returns finished clips when another batch is malformed", async () => {
+    const ids = Array.from({ length: 13 }, (_, i) => `clip-${i}`);
     const { post } = harness({
       toolResults: {
-        "audio-wait": (args) => (args.ids as string[]).includes("e") ? malformedResult : settle(args)
+        "audio-wait": (args) => (args.ids as string[]).includes(ids[12]) ? malformedResult : settle(args)
       }
     });
-    const response = await post("/api/songs/wait-all", { ids: ["a", "b", "c", "d", "e"] });
+    const response = await post("/api/songs/wait-all", { ids });
     assert.equal(response.status, 202);
     const body = await response.json() as { clips: unknown[]; pending: string[]; wait_error: unknown };
-    assert.equal(body.clips.length, 4);
-    assert.deepEqual(body.pending, ["e"]);
+    assert.equal(body.clips.length, 12);
+    assert.deepEqual(body.pending, [ids[12]]);
     assert.deepEqual(body.wait_error, { error: "Unexpected response from Suno" });
   });
 

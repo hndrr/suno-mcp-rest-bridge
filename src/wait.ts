@@ -1,9 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { JsonObject, JsonValue } from "./suno.js";
 import { fields, isRecord } from "./upload.js";
-
-// audio-wait accepts at most four IDs per call.
-const maxIdsPerCall = 4;
+import { maxWaitIdsPerCall } from "./schemas.js";
 
 export type WaitUntil = "playable" | "complete";
 
@@ -64,8 +62,8 @@ export async function* pollClips(
   for (;;) {
     if (signal?.aborted) return;
     const batches: string[][] = [];
-    for (let i = 0; i < pending.length; i += maxIdsPerCall) {
-      batches.push(pending.slice(i, i + maxIdsPerCall));
+    for (let i = 0; i < pending.length; i += maxWaitIdsPerCall) {
+      batches.push(pending.slice(i, i + maxWaitIdsPerCall));
     }
     // Reading the result inside the batch makes a malformed one a failed round, like a failed call.
     const rounds = await Promise.allSettled(

@@ -1,6 +1,6 @@
 {
   "endpoint": "https://api.suno.com/mcp",
-  "retrieved_at": "2026-11-05T11:13:02.835Z",
+  "retrieved_at": "2026-11-07T04:38:57.060Z",
   "tools": [
     {
       "name": "account-me",
@@ -182,6 +182,9 @@
           "max_mode": {
             "type": "boolean"
           },
+          "midi_upload_id": {
+            "type": "string"
+          },
           "model": {
             "type": "string"
           },
@@ -252,8 +255,12 @@
     {
       "name": "audio-edit",
       "inputSchema": {
-        "type": "object",
+        "additionalProperties": false,
         "properties": {
+          "caption": {
+            "maxLength": 500,
+            "type": "string"
+          },
           "id": {
             "type": "string"
           },
@@ -267,7 +274,7 @@
         "required": [
           "id"
         ],
-        "additionalProperties": false
+        "type": "object"
       }
     },
     {
@@ -528,6 +535,21 @@
       }
     },
     {
+      "name": "audio-midi",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "audio-retrieve",
       "inputSchema": {
         "type": "object",
@@ -540,6 +562,76 @@
           "id"
         ],
         "additionalProperties": false
+      }
+    },
+    {
+      "name": "audio-settings",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "can_remix": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "visibility": {
+            "enum": [
+              "public",
+              "private"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "audio-stems-create",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "idempotency_key": {
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "two",
+              "twelve"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "mode"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "audio-stems-retrieve",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "group_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "group_id"
+        ],
+        "type": "object"
       }
     },
     {
@@ -613,7 +705,6 @@
     {
       "name": "audio-wait",
       "inputSchema": {
-        "type": "object",
         "properties": {
           "id": {
             "type": "string"
@@ -622,7 +713,7 @@
             "items": {
               "type": "string"
             },
-            "maxItems": 4,
+            "maxItems": 12,
             "type": "array"
           },
           "until": {
@@ -633,7 +724,8 @@
             ],
             "type": "string"
           }
-        }
+        },
+        "type": "object"
       }
     },
     {
@@ -749,6 +841,51 @@
           }
         },
         "additionalProperties": false
+      }
+    },
+    {
+      "name": "midi-upload-complete",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "midi-upload-create",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "file": {
+            "properties": {
+              "download_url": {
+                "type": "string"
+              },
+              "file_id": {
+                "type": "string"
+              },
+              "file_name": {
+                "type": "string"
+              },
+              "mime_type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "download_url",
+              "file_id"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "object"
       }
     },
     {
