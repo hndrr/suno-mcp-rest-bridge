@@ -8,6 +8,7 @@ import type { JsonValue } from "./suno.js";
 
 const snapshotPath = "test/fixtures/suno-input-schemas.json";
 const branch = "codex/suno-schema-baseline";
+const proposalCommitMessage = "chore: update Suno MCP schema baseline";
 const snapshotSchema = z.object({
   endpoint: z.literal("https://api.suno.com/mcp"),
   retrieved_at: z.iso.datetime().optional(),
@@ -15,7 +16,7 @@ const snapshotSchema = z.object({
 });
 type Snapshot = z.infer<typeof snapshotSchema>;
 type Identity = { name: string; email: string };
-type Commit = { sha: string; tree: { sha: string }; parents: { sha: string }[]; author: Identity; committer: Identity };
+type Commit = { sha: string; message: string; tree: { sha: string }; parents: { sha: string }[]; author: Identity; committer: Identity };
 type GhCommand = (args: string[], input?: string) => string;
 
 function schemaChanges(before: JsonValue | undefined, after: JsonValue | undefined, path = ""): object[] {
@@ -73,7 +74,17 @@ export function createSchemaPullRequest(
   const sameProposal = previous && schemasMatch(previous.tools, live.tools);
   if (previous?.retrieved_at && Date.parse(previous.retrieved_at) > Date.parse(report.checked_at)) return;
   const previousCommit = head ? api<Commit>(`git/commits/${head}`) : undefined;
-  const update = !sameProposal || previousCommit?.parents[0]?.sha !== base;
+  // Adding implementation commits hands the PR over to its reviewer. Do not replace
+  // those changes or reset their PR description/draft state on the next monitor run.
+  if (previousCommit) {
+    const comparison = api<{ files?: { filename: string }[] }>(`compare/${base}...${head}`);
+    if (previousCommit.message !== proposalCommitMessage || previousCommit.parents.length !== 1 ||
+        !comparison.files || comparison.files.some((file) => file.filename !== snapshotPath)) {
+      console.log("The schema proposal contains developer changes; leaving its branch and PR unchanged.");
+      return;
+    }
+  }
+  const update = !sameProposal;
   let proposalSha = head;
 
   if (update) {
@@ -99,19 +110,20 @@ export function createSchemaPullRequest(
       }))
         .sort((a, b) => a.name.localeCompare(b.name))
     };
-    const baseCommit = api<Commit>(`git/commits/${base}`);
+    const parent = previousCommit ?? api<Commit>(`git/commits/${base}`);
     const tree = api<{ sha: string }>("git/trees", {
-      base_tree: baseCommit.tree.sha,
+      base_tree: parent.tree.sha,
       tree: [{ path: snapshotPath, mode: "100644", type: "blob", content: `${JSON.stringify(snapshot, null, 2)}\n` }]
     });
     const commit = api<Commit>("git/commits", {
-      message: "chore: update Suno MCP schema baseline", tree: tree.sha, parents: [base],
+      message: proposalCommitMessage, tree: tree.sha, parents: [head ?? base],
       author: identity, committer: identity
     });
     if ([commit.author, commit.committer].some(({ name, email }) => name !== identity.name || email !== identity.email)) {
       throw new Error("The schema commit author or committer did not match the required identity.");
     }
-    if (head) api(`git/refs/heads/${branch}`, { sha: commit.sha, force: true }, "PATCH");
+    // A concurrent developer push must reject this update instead of being overwritten.
+    if (head) api(`git/refs/heads/${branch}`, { sha: commit.sha, force: false }, "PATCH");
     else api("git/refs", { ref: `refs/heads/${branch}`, sha: commit.sha });
     proposalSha = commit.sha;
   }
