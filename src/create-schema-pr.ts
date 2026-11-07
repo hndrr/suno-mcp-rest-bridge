@@ -7,7 +7,7 @@ import { diffToolSchemas, normalizeSchema, type ToolSchema } from "./schema-diff
 import type { JsonValue } from "./suno.js";
 
 const snapshotPath = "test/fixtures/suno-input-schemas.json";
-const branch = "codex/suno-schema-baseline";
+const branchPrefix = "codex/suno-schema-baseline";
 const proposalCommitMessage = "chore: update Suno MCP schema baseline";
 const snapshotSchema = z.object({
   endpoint: z.literal("https://api.suno.com/mcp"),
@@ -18,6 +18,10 @@ type Snapshot = z.infer<typeof snapshotSchema>;
 type Identity = { name: string; email: string };
 type Commit = { sha: string; message: string; tree: { sha: string }; parents: { sha: string }[]; author: Identity; committer: Identity };
 type GhCommand = (args: string[], input?: string) => string;
+type Proposal = {
+  number: number; url: string; isDraft: boolean; headRefName: string;
+  state: "OPEN" | "CLOSED" | "MERGED";
+};
 
 function schemaChanges(before: JsonValue | undefined, after: JsonValue | undefined, path = ""): object[] {
   if (before && after && typeof before === "object" && typeof after === "object" &&
@@ -67,6 +71,18 @@ export function createSchemaPullRequest(
   const oldTools = new Map(baseline.tools.map((tool) => [tool.name, tool.inputSchema]));
   const changedTools = new Set([...diff.added, ...diff.changed]);
 
+  const proposals = (JSON.parse(runGh([
+    "pr", "list", "--repo", repository, "--base", repo.default_branch,
+    "--state", "all", "--limit", "1000", "--json", "number,url,isDraft,headRefName,state"
+  ])) as Proposal[]).filter((pr) =>
+    pr.headRefName === branchPrefix || (pr.headRefName.startsWith(`${branchPrefix}-`) &&
+      /^\d+$/.test(pr.headRefName.slice(branchPrefix.length + 1)))
+  );
+  const open = proposals.find((pr) => pr.state === "OPEN");
+  const lastClosed = proposals.filter((pr) => pr.state !== "OPEN").sort((a, b) => b.number - a.number)[0];
+  // A closed proposal's branch can contain implementation commits or a pre-squash
+  // tree. Leave it intact and start the next proposal from the latest default branch.
+  const branch = open?.headRefName ?? (lastClosed ? `${branchPrefix}-${lastClosed.number}` : branchPrefix);
   const refs = api<{ ref: string; object: { sha: string } }[]>(`git/matching-refs/heads/${branch}`);
   const head = refs.find((ref) => ref.ref === `refs/heads/${branch}`)?.object.sha;
   const previous = head ? readSnapshot(head) : undefined;
@@ -147,16 +163,15 @@ export function createSchemaPullRequest(
     ...(runUrl ? [`[Schema check run](${runUrl}).`] : []),
     marker
   ].join("\n\n") + "\n", "utf8");
-  const prs = JSON.parse(runGh([
-    "pr", "list", "--repo", repository, "--base", repo.default_branch, "--head", branch,
-    "--state", "open", "--limit", "1", "--json", "number,url,isDraft,body"
-  ])) as { number: number; url: string; isDraft: boolean; body: string }[];
-  if (prs.length) {
-    if (update || !prs[0].body.includes(marker)) {
-      if (!prs[0].isDraft) runGh(["pr", "ready", String(prs[0].number), "--repo", repository, "--undo"]);
-      runGh(["pr", "edit", String(prs[0].number), "--repo", repository, "--body-file", bodyFile]);
+  if (open) {
+    const { body } = JSON.parse(runGh([
+      "pr", "view", String(open.number), "--repo", repository, "--json", "body"
+    ])) as { body: string };
+    if (update || !body.includes(marker)) {
+      if (!open.isDraft) runGh(["pr", "ready", String(open.number), "--repo", repository, "--undo"]);
+      runGh(["pr", "edit", String(open.number), "--repo", repository, "--body-file", bodyFile]);
     }
-    return prs[0].url;
+    return open.url;
   }
   return runGh([
     "pr", "create", "--repo", repository, "--base", repo.default_branch, "--head", branch, "--draft",
