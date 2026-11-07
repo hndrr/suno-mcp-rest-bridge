@@ -47,9 +47,9 @@ curl -X POST http://127.0.0.1:8787/api/songs/wait \
   -d '{"ids":["FIRST_CLIP_ID","SECOND_CLIP_ID"], "until":"complete"}'
 ```
 
-`id` または `ids` のどちらか一方を指定します。`ids` は1〜4件で、5件以上は分割します。返却された `clips` の各曲が `complete` か確認してください。約50秒後も生成中なら同じ待機リクエストを繰り返します。
+`id` または `ids` のどちらか一方を指定します。`ids` は1〜12件で、13件以上は分割します。返却された `clips` の各曲が `complete` か確認してください。約50秒後も生成中なら同じ待機リクエストを繰り返します。
 
-IDの前後の空白は除去し、重複IDは1件にまとめてSunoへ送ります。1リクエストの上限は重複除去前の4件です。
+IDの前後の空白は除去し、重複IDは1件にまとめてSunoへ送ります。1リクエストの上限は重複除去前の12件です。
 
 ## Max Mode
 
@@ -125,6 +125,42 @@ suno.comのPro以上のプランが必要で、2個の音源を生成し、1個�
 
 通常は202で、返却された `clip_ids` をすべて保持して既存の曲情報・待機APIを使います。`?wait=complete` も利用でき、既存の残高チェックと冪等キーの必須化も適用されます。
 
+## MIDIから生成
+
+`POST /api/midi/uploads/sessions` に `{}` または空の本文を送ると、201で `midi_upload_id`・`upload_url`・`upload_fields` が返ります。10分以内に、そのURLへ **multipart/form-dataでPOST** してください。返却された `upload_fields` の全項目を先に追加し、最後に `file` としてMIDIファイルを付けます。音声アップロードのPUTとは異なります。音符のある `.mid`・`.midi` が対象で、上限は256 KBです。URLと署名フィールドは非公開にしてください。
+
+送信後、`POST /api/midi/uploads/MIDI_UPLOAD_ID/complete` に `{}` または空の本文を送ります。200の応答に含まれる `midi_upload_id` を通常生成・サンプルで使えます。
+
+```json
+{
+  "midi_upload_id": "MIDI_UPLOAD_ID",
+  "description": "このメロディを使ったシンセウェーブ",
+  "idempotency_key": "melody-001"
+}
+```
+
+MIDIのみでも生成でき、`description` は任意です。Simpleモード専用で、`lyrics`・`style`・`negative_style` は併用できません。`model` は省略時にSunoが `v6-wild` を選び、明示する場合も `v6-wild` に限ります。MIDIは参照10件のうち1件に数えるため、併用する `reference_audio_ids` は最大9件です。既存の残高・冪等キーの検査と `?wait=complete` なども使えます。著作権チェックが終わるまで曲は `queued` のままで、早期再生は始まりません。
+
+添付済みMIDIのメタデータがある場合は、セッション作成に `file: {"download_url":"…","file_id":"…"}` を渡せます。`file_name`・`mime_type` と添付元の追加メタデータも保持します。この場合はSunoが直接取得・検証し、完了済みアップロードを200で返すため、別途送信・完了通知は不要です。suno.comへのログインが必要です。
+
+## ステム分離・MIDI変換
+
+`POST /api/songs/CLIP_ID/stems` に `{"mode":"two","idempotency_key":"stems-001"}` を送ると、202でグループが返ります。その `id` を `GET /api/songs/CLIP_ID/stems/GROUP_ID` に指定し、`status` が `pending` でなくなるまで取得します。
+
+`two` はボーカル・伴奏を2テイクずつ（計4曲）、`twelve` は12パートを2テイクずつ（計24曲）に分離します。`partial` は一部失敗なので、各ステムの結果も確認してください。各 `audio_id` は通常の曲IDとして使えます。自分のライブラリの完成済み音源が対象で、ステムの再分離はできません。
+
+現在のSunoの説明では `two` は10、`twelve` は50クレジットで、成功したテイクごとに課金されます。実行前にモードと費用を確認してください。残高検査と冪等キーの必須化が適用されます。再試行は同じキーを使います。ステム作成の `?wait=` は400になるため、専用のグループ取得APIを使ってください。
+
+MIDI変換は `POST /api/songs/CLIP_ID/midi` に `{}` または空の本文を送り、繰り返し確認します。HTTP 200で、`status` が `processing` なら処理中、`ok` ならMIDIの `url` と `instruments`、`failed` なら変換失敗です。Studio対応のPremierプランが必要で、現在の説明では初回は10クレジット、変換済み曲の再取得と生成型Get Stems由来のステムは無料です。初回の費用と最新条件は `/api/tools` で確認してください。ブリッジは毎回残高を検査します。このツールには冪等キーの入力がなく、Sunoが曲IDごとに結果を再利用するため、`REQUIRE_IDEMPOTENCY_KEY` の対象外です。未完成の曲では `not_ready`（422）を返すので、完成後に再実行してください。
+
+## caption・公開設定の編集
+
+`PATCH /api/songs/CLIP_ID` は `caption`（最大500文字）にも対応します。単独でも `title`・`lyrics` と組み合わせても指定でき、空文字列で曲ページの説明を消せます。編集項目は最低1つ必要です。
+
+`PATCH /api/songs/CLIP_ID/settings` は `visibility`（`public`・`private`）、`can_remix`（JSONの真偽値）、または両方を受け付けます。省略した項目はそのままで、`false` も保持します。`public` は曲を公開するので、ユーザーが希望した場合に指定してください。自分の曲と `library:write` 権限が必要です。
+
+再生が始まった曲でも公開が保留される場合は、`publish_pending: true` と返却された `visibility` を確認します。Sunoは `can_remix` を先に変更するため、その後の公開が失敗した場合も `details` に変更済みの情報が含まれることがあります。ブリッジは自動再試行しません。
+
 ## その他のAPI
 
 | メソッド・パス | 内容 |
@@ -139,11 +175,17 @@ suno.comのPro以上のプランが必要で、2個の音源を生成し、1個�
 | `POST /api/songs` | 通常生成。曲数はSuno側の既定値 |
 | `POST /api/speech` | `script` または `prompt` から音声を生成。モデルは既定のみ |
 | `POST /api/sounds` | 効果音・ワンショット・ループを2個生成 |
-| `POST /api/songs/wait` | 1件の `id` または最大4件の `ids` を待機 |
+| `POST /api/songs/wait` | 1件の `id` または最大12件の `ids` を待機 |
 | `POST /api/songs/wait-all` | 最大20件の `ids` を、確定するまで繰り返し待機 |
 | `GET /api/songs/events?ids=ID1,ID2` | 曲の状態変化をServer-Sent Eventsで通知 |
 | `GET /api/songs/:id` | 曲情報・生成状態 |
-| `PATCH /api/songs/:id` | 曲の `title`・`lyrics` を変更 |
+| `PATCH /api/songs/:id` | 曲の `title`・`lyrics`・`caption` を変更 |
+| `PATCH /api/songs/:id/settings` | 公開状態・リミックス許可を変更 |
+| `POST /api/songs/:id/midi` | MIDI変換を開始・確認。初回はクレジット消費の場合あり |
+| `POST /api/songs/:id/stems` | `two`・`twelve` でステム分離を開始 |
+| `GET /api/songs/:id/stems/:group_id` | ステムの両テイクと各処理結果を取得 |
+| `POST /api/midi/uploads/sessions` | MIDIのアップロード先を発行、または添付を取り込み |
+| `POST /api/midi/uploads/:id/complete` | 送信済みMIDIを検証し、生成用IDを取得 |
 | `GET /api/songs/:id/wait` | 再生可能まで待つ |
 | `GET /api/songs/:id/analysis` | タグ、拍、テンポ、キー、セクションの取得。`status` が `processing` でなくなるまで再取得 |
 | `POST /api/songs/:id/listen` | 完成済み音源に質問し、受付IDを取得 |
@@ -175,6 +217,8 @@ Sunoのツールがリクエストを拒否した場合は、`details` にSuno�
 | `insufficient_credits` | 402 |
 | `forbidden`、`feature_not_on_plan`、`user_principal_required` | 403 |
 | `not_found` | 404 |
+| `idempotency_key_reused`、`idempotency_in_progress` | 409 |
+| `not_ready` | 422 |
 | `rate_limited`、`quota_exceeded`、`concurrency_limit_exceeded` | 429 |
 | 上記以外、コードなし、または `details` がオブジェクトでない場合 | 502 |
 

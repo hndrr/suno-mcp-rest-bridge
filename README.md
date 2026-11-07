@@ -1,6 +1,6 @@
 # [WIP] Suno MCP → REST API bridge (TypeScript / Hono)
 
-An **unofficial, single-account local** REST adapter for Suno's **official MCP** endpoint at `https://api.suno.com/mcp`. Supports short samples, custom songs, speech, sound effects and loops, library search, source-audio uploads, covers, mashups, extensions, full-song joining, status polling and events, audio analysis and questions, downloads, voices, playlists and workspaces. **No unofficial Suno scraper or third-party Suno API is involved.**
+An **unofficial, single-account local** REST adapter for Suno's **official MCP** endpoint at `https://api.suno.com/mcp`. Supports short samples, custom songs, speech, sound effects and loops, library search, audio and MIDI uploads, covers, mashups, extensions, full-song joining, stem separation, MIDI transcription, song settings, status polling and events, audio analysis and questions, downloads, voices, playlists and workspaces. **No unofficial Suno scraper or third-party Suno API is involved.**
 
 - **Node.js 22+**, TypeScript, Hono, maintained MCP TypeScript SDK v2 (`@modelcontextprotocol/client`)
 - `mcp-remote` handles Suno's browser-based OAuth; tokens are **not** the bridge's `API_KEY`
@@ -56,11 +56,15 @@ export API_KEY=YOUR_LOCAL_API_KEY
 | POST | `/api/samples` | `audio-create` | Generate **15–60s** samples, defaults to **15s** and strict duration |
 | POST | `/api/speech` | `speech-create` | Generate speech from a `script` or a `prompt`; always uses the default model |
 | POST | `/api/sounds` | `sounds-create` | Generate two sound effects, one-shots or loops |
-| POST | `/api/songs/wait` | `audio-wait` | Wait for one `id` or up to four `ids` |
+| POST | `/api/songs/wait` | `audio-wait` | Wait for one `id` or up to twelve `ids` |
 | POST | `/api/songs/wait-all` | `audio-wait` | Wait for up to 20 `ids`, repeating until they settle |
 | GET | `/api/songs/events?ids=ID1,ID2` | `audio-wait` | Server-Sent Events stream of clip status changes |
 | GET | `/api/songs/:id` | `audio-retrieve` | Get clip status / song info |
-| PATCH | `/api/songs/:id` | `audio-edit` | Change a song's `title` or `lyrics` |
+| PATCH | `/api/songs/:id` | `audio-edit` | Change a song's `title`, `lyrics` or `caption` |
+| PATCH | `/api/songs/:id/settings` | `audio-settings` | Publish/unpublish or change `can_remix` |
+| POST | `/api/songs/:id/midi` | `audio-midi` | Start or poll MIDI transcription; may spend credits |
+| POST | `/api/songs/:id/stems` | `audio-stems-create` | Start a paid stem split; returns a group ID |
+| GET | `/api/songs/:id/stems/:group_id` | `audio-stems-retrieve` | Retrieve the group's stems and both takes |
 | GET | `/api/songs/:id/wait?until=playable` | `audio-wait` | Wait up to ~50 seconds until playable or complete |
 | GET | `/api/songs/:id/analysis` | `audio-analysis` | Tags, beats, tempo, key and sections; poll until `status` leaves `processing` |
 | POST | `/api/songs/:id/listen` | `audio-listen` | Ask a question about a finished clip; returns a listen ID |
@@ -79,6 +83,8 @@ export API_KEY=YOUR_LOCAL_API_KEY
 | POST | `/api/uploads/file` | upload create + HTTPS PUT + upload complete | Upload one multipart `file` in a request |
 | POST | `/api/uploads/sessions` | `audio-upload-create` | Start an upload session, or process an attached `file` |
 | POST | `/api/uploads/:id/complete` | `audio-upload-complete` | Finalize a manual upload |
+| POST | `/api/midi/uploads/sessions` | `midi-upload-create` | Start a signed multipart POST upload, or finish an attached MIDI file |
+| POST | `/api/midi/uploads/:id/complete` | `midi-upload-complete` | Validate a manually uploaded MIDI score |
 | POST | `/api/songs/:id/cover` | `audio-covers-create` | Cover an existing completed clip |
 | POST | `/api/songs/:id/mashup` | `audio-mashups-create` | Blend two completed clips |
 | POST | `/api/songs/:id/extend` | `audio-extensions-create` | Extend from `continue_at` seconds |
@@ -97,6 +103,8 @@ When a Suno tool refuses a request, the response body is `{"error":"Suno MCP too
 | `insufficient_credits` | 402 |
 | `forbidden`, `feature_not_on_plan`, `user_principal_required` | 403 |
 | `not_found` | 404 |
+| `idempotency_key_reused`, `idempotency_in_progress` | 409 |
+| `not_ready` | 422 |
 | `rate_limited`, `quota_exceeded`, `concurrency_limit_exceeded` | 429 |
 | Any other or missing code, or `details` that isn't an object | 502 |
 
@@ -120,9 +128,9 @@ curl -sS -X POST "$BASE/api/songs/wait" \
   -d '{"ids":["FIRST_CLIP_ID","SECOND_CLIP_ID"], "until":"complete"}'
 ```
 
-Supply exactly one of `id` or `ids`; `ids` accepts one to four clip IDs. Split larger lists into separate requests. `until` defaults to `playable`; `complete` waits for the finished files. The response passes through Suno's `clips` array for a batch; inspect every clip's status and any error. If clips are still pending after about 50 seconds, repeat the wait request. The existing `GET /api/songs/:id/wait` route remains available for a single clip.
+Supply exactly one of `id` or `ids`; `ids` accepts one to twelve clip IDs. Split larger lists into separate requests. `until` defaults to `playable`; `complete` waits for the finished files. The response passes through Suno's `clips` array for a batch; inspect every clip's status and any error. If clips are still pending after about 50 seconds, repeat the wait request. The existing `GET /api/songs/:id/wait` route remains available for a single clip.
 
-IDs are trimmed, and duplicate batch IDs are sent upstream only once. The four-ID request limit applies before deduplication.
+IDs are trimmed, and duplicate batch IDs are sent upstream only once. The twelve-ID request limit applies before deduplication.
 
 To customize the prompt instead of description, use `lyrics` and `style`; **do not combine** `description` with `lyrics` or `style`:
 
@@ -277,9 +285,9 @@ The response has `created` (Suno's creation result), plus `clips`, `pending`, an
 
 Credits are spent once Suno accepts the creation, so a wait that times out or fails doesn't fail the request: it returns 202 with `created` and, if the wait failed, `wait_error`. Keep waiting with the IDs in `pending`. A settled clip can still have failed, so check each clip's `status` and `error`.
 
-## 9. Wait for more than four clips
+## 9. Wait for more than twelve clips
 
-`POST /api/songs/wait-all` takes up to 20 `ids`, an optional `until` and an optional `timeout`, and returns `clips`, `pending` and `timed_out` as above. It splits the IDs into batches of four and repeats until they settle. If the wait fails before any clip is read, it returns the upstream error status.
+`POST /api/songs/wait-all` takes up to 20 `ids`, an optional `until` and an optional `timeout`, and returns `clips`, `pending` and `timed_out` as above. It splits the IDs into batches of twelve and repeats until they settle. If the wait fails before any clip is read, it returns the upstream error status.
 
 To follow progress instead of holding a request open, use the event stream:
 
@@ -358,12 +366,57 @@ curl -sS -X POST "$BASE/api/sounds?wait=complete" \
 
 Requires a suno.com sign-in on Pro or higher. Suno generates two clips at one credit each. `description` is required (1–500 characters); optional fields are `loop`, integer `tempo` (1–300 BPM), `key`, `title` and `idempotency_key`. Keys use sharp notation, e.g. `C#` or `C#m`. Suno chooses the model and duration. The existing credit guards and generation-wait options apply, and every returned `clip_ids` entry is preserved. Without `?wait`, the response is HTTP 202; use the song retrieval and wait routes for each clip.
 
+## Generate from a MIDI score
+
+Start with `POST /api/midi/uploads/sessions` and an empty body or `{}` (HTTP 201). Suno returns `midi_upload_id`, `upload_url` and `upload_fields`. Within ten minutes, **POST multipart/form-data** to that URL, adding every returned `upload_fields` entry before the final `file` field containing your `.mid` or `.midi` file. MIDI uploads use a signed POST, unlike audio uploads' raw PUT. The score must contain notes and be under 256 KB. Keep the URL and fields private: they are temporary credentials.
+
+Then finalize it using that upload's ID:
+
+```bash
+curl -sS -X POST "$BASE/api/midi/uploads/MIDI_UPLOAD_ID/complete" \
+  -H "Authorization: Bearer $API_KEY"
+```
+
+Completion returns HTTP 200. Pass its `midi_upload_id` to `/api/songs` or `/api/samples`:
+
+```bash
+curl -sS -X POST "$BASE/api/songs?wait=complete" \
+  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -d '{"midi_upload_id":"MIDI_UPLOAD_ID","description":"A synthwave track that plays my melody","idempotency_key":"melody-001"}'
+```
+
+The score alone is also sufficient: `description` is optional. MIDI requires Simple mode, so `lyrics`, `style` and `negative_style` are rejected. Omit `model` for Suno to choose `v6-wild`, or explicitly send `"model":"v6-wild"`; any other model returns 400. A score counts as one reference, leaving room for at most nine `reference_audio_ids`. Credits, idempotency requirements and generation-wait options apply as for other songs. Suno holds MIDI-based songs in `queued` until its copyright check passes, so they do not stream early.
+
+When your client has chat attachment metadata, send `{"file":{"download_url":"…","file_id":"…"}}` to `/api/midi/uploads/sessions`, optionally including `file_name`, `mime_type` and provider metadata inside `file`. Suno uploads and validates it directly; the bridge returns the finished upload with HTTP 200. No separate file transfer or completion call is needed. These MIDI features require a suno.com sign-in.
+
+## Separate stems and transcribe MIDI
+
+```bash
+curl -sS -X POST "$BASE/api/songs/CLIP_ID/stems" \
+  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -d '{"mode":"two","idempotency_key":"stems-001"}'
+```
+
+This returns HTTP 202. Use the returned group's `id` in `GET /api/songs/CLIP_ID/stems/GROUP_ID` until its `status` leaves `pending`. `two` produces two takes of vocals and instrumental (four clips); `twelve` produces two takes of twelve parts (24 clips). `partial` means only some stems succeeded; inspect every stem. Each `audio_id` is an ordinary clip ID. The source must be a finished song in the signed-in user's library; a stem cannot be split again.
+
+Suno currently describes costs of 10 credits for `two` and 50 for `twelve`, charged per successful take. Confirm the desired mode and cost before starting. The bridge applies `MIN_CREDITS_REMAINING` and `REQUIRE_IDEMPOTENCY_KEY`; reuse the same key to retry a split safely. Stem groups use their own retrieval route, so `?wait=` is rejected on stem creation. Retrieval does not start another split.
+
+For transcription, repeatedly call `POST /api/songs/CLIP_ID/midi` with an empty body or `{}`. It returns HTTP 200 with `status: processing` while working, `ok` with the MIDI `url` and `instruments` when ready, or `failed` if it could not finish. Suno requires a Studio-enabled Premier plan and currently describes a 10-credit charge for a new transcription, with free retrieval of an existing transcription and no transcription charge for its generative Get Stems clips. Confirm the cost before the first call; inspect `/api/tools` for current requirements. The bridge checks `MIN_CREDITS_REMAINING` on each call. There is no `idempotency_key` input for this tool, so `REQUIRE_IDEMPOTENCY_KEY` does not block it; Suno caches transcription by clip ID. A still-generating source returns `not_ready` (HTTP 422); wait for completion before retrying.
+
+## Edit captions and song settings
+
+`PATCH /api/songs/CLIP_ID` accepts `caption` (up to 500 characters), on its own or alongside `title` and `lyrics`. An empty caption clears the description on the song's suno.com page. At least one edit field is required.
+
+`PATCH /api/songs/CLIP_ID/settings` takes `visibility` (`public` or `private`), `can_remix` (a JSON boolean), or both. Omitted settings stay unchanged; explicit `false` is preserved. `public` publishes the song for others to find, so send it only when the user asks. These settings require ownership and a suno.com token with `library:write`.
+
+Suno can defer publication of a streaming song: preserve `publish_pending: true` and inspect its returned visibility. It applies `can_remix` first, so if publishing then fails, inspect the error's `details` for a change already made; the bridge does not retry automatically.
+
 ## Important limitations and security
 
 1. **Local PoC only.** Listens on `127.0.0.1` by default. Do not turn this into an Internet-facing endpoint merely by setting `HOST=0.0.0.0`. Production use requires HTTPS, strong auth, per-user OAuth, encrypted durable token storage, rate limits/quotas, upload-size and concurrency controls.
 2. **Uploaded files are buffered only in RAM** up to `MAX_UPLOAD_MB`; no temp files are written. Single-request upload uses an HTTPS PUT and rejects redirects. It never forwards file bytes as the MCP tool JSON body.
 3. **Chargeable operations are not automatically retried.** Supply a unique `idempotency_key` to safely repeat the *same* generation request if the upstream request timed out; reusing a key with different parameters will fail.
-4. **Generation is asynchronous**: creation returns clip ID(s). Process every returned ID; `/api/songs/wait` accepts batches of up to four. Remixes require the source clip's status to be `complete`.
+4. **Generation is asynchronous**: creation returns clip ID(s). Process every returned ID; `/api/songs/wait` accepts batches of up to twelve. Remixes require the source clip's status to be `complete`.
 5. This project does not expose waveform editor, 5-second generator, or a server-side MP3 download proxy.
 
 For maintenance instructions, see [MAINTENANCE.md](MAINTENANCE.md).

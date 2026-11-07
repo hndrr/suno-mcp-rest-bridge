@@ -201,19 +201,21 @@ describe("malformed results over the real MCP transport", () => {
   });
 
   it("returns finished clips when another batch can't be read", async () => {
-    const response = await waitAll(["a", "b", "c", "d", "mixedMedia"]);
+    const ids = Array.from({ length: 12 }, (_, i) => `clip-${i}`);
+    const response = await waitAll([...ids, "mixedMedia"]);
     assert.equal(response.status, 202);
     const body = await response.json() as { clips: unknown[]; pending: string[]; wait_error: unknown };
-    assert.equal(body.clips.length, 4);
+    assert.equal(body.clips.length, 12);
     assert.deepEqual(body.pending, ["mixedMedia"]);
     assert.deepEqual(body.wait_error, { error: "Unexpected response from Suno" });
   });
 
   it("returns finished clips when the MCP client rejects another batch", async () => {
-    const response = await waitAll(["a", "b", "c", "d", "nullStructured"]);
+    const ids = Array.from({ length: 12 }, (_, i) => `clip-${i}`);
+    const response = await waitAll([...ids, "nullStructured"]);
     assert.equal(response.status, 202);
     const body = await response.json() as { clips: unknown[]; pending: string[]; wait_error: unknown };
-    assert.equal(body.clips.length, 4);
+    assert.equal(body.clips.length, 12);
     assert.deepEqual(body.pending, ["nullStructured"]);
     assert.ok(body.wait_error);
   });

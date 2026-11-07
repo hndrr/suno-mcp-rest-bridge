@@ -4,6 +4,9 @@ const boundedId = z.string().trim().min(1).max(255);
 const idempotencyKey = z.string().min(1).max(255).regex(/\S/, "Must contain a non-whitespace character");
 const duration = z.number().int().min(15).max(360);
 
+export const emptyBodySchema = z.object({}).strict();
+export const maxWaitIdsPerCall = 12;
+
 export const controlsSchema = z.object({
   audio_influence: z.number().min(0).max(1).optional(),
   style_influence: z.number().min(0).max(1).optional(),
@@ -21,6 +24,7 @@ const createSongFields = {
   title: z.string().min(1).max(256).optional(),
   instrumental: z.boolean().optional(),
   max_mode: z.boolean().optional(),
+  midi_upload_id: boundedId.optional(),
   duration: duration.optional(),
   duration_guidance: z.boolean().optional(),
   duration_strict: z.boolean().optional(),
@@ -40,6 +44,8 @@ type SongModeInput = {
   style?: string;
   negative_style?: string;
   instrumental?: boolean;
+  midi_upload_id?: string;
+  model?: string;
   duration?: number;
   duration_guidance?: boolean;
   duration_strict?: boolean;
@@ -52,11 +58,11 @@ type SongModeIssue = { path: string[]; message: string };
 function songModeIssues(song: SongModeInput): SongModeIssue[] {
   const issues: SongModeIssue[] = [];
   if (song.reference_audio_ids?.length && (
-    !song.description || song.lyrics !== undefined || song.style !== undefined || song.negative_style !== undefined
+    (!song.description && !song.midi_upload_id) || song.lyrics !== undefined || song.style !== undefined || song.negative_style !== undefined
   )) {
     issues.push({
       path: ["reference_audio_ids"],
-      message: "Reference audio requires description in simple mode, without lyrics, style or negative_style"
+      message: "Reference audio requires description or midi_upload_id in simple mode, without lyrics, style or negative_style"
     });
   }
   if (song.description && (
@@ -67,11 +73,22 @@ function songModeIssues(song: SongModeInput): SongModeIssue[] {
       message: "Simple mode cannot combine description with style or negative_style, or lyrics unless instrumental=true"
     });
   }
-  if (!song.description && !song.lyrics && song.instrumental !== true) {
+  if (!song.description && !song.lyrics && !song.midi_upload_id && song.instrumental !== true) {
     issues.push({
       path: ["lyrics"],
-      message: "Provide description or lyrics, or set instrumental=true"
+      message: "Provide description, lyrics or midi_upload_id, or set instrumental=true"
     });
+  }
+  if (song.midi_upload_id) {
+    if (song.lyrics !== undefined || song.style !== undefined || song.negative_style !== undefined) {
+      issues.push({ path: ["midi_upload_id"], message: "MIDI requires simple mode, without lyrics, style or negative_style" });
+    }
+    if (song.model !== undefined && song.model !== "v6-wild") {
+      issues.push({ path: ["model"], message: "MIDI requires v6-wild; omit model to use it automatically" });
+    }
+    if ((song.reference_audio_ids?.length ?? 0) >= 10) {
+      issues.push({ path: ["reference_audio_ids"], message: "MIDI counts as one of the 10 reference inputs; provide at most 9 audio IDs" });
+    }
   }
   if (song.controls?.audio_influence !== undefined && !song.voice_id) {
     issues.push({
@@ -162,15 +179,19 @@ export const uploadSessionSchema = z.object({
   title: z.string().trim().min(1).max(256).optional()
 }).strict();
 
+// Match the upstream attachment contract: strings plus optional provider metadata.
+const attachmentSchema = z.object({
+  download_url: z.string(),
+  file_id: z.string(),
+  file_name: z.string().optional(),
+  mime_type: z.string().optional()
+}).loose();
+
 export const uploadCreateSchema = uploadSessionSchema.extend({
-  // Match the upstream attachment contract: strings plus optional provider metadata.
-  file: z.object({
-    download_url: z.string(),
-    file_id: z.string(),
-    file_name: z.string().optional(),
-    mime_type: z.string().optional()
-  }).loose().optional()
+  file: attachmentSchema.optional()
 });
+
+export const midiUploadCreateSchema = z.object({ file: attachmentSchema.optional() }).strict();
 
 const libraryFields = {
   cursor: z.string().min(1).optional(),
@@ -198,7 +219,7 @@ export const waitQuerySchema = z.object({
 
 export const waitBodySchema = waitQuerySchema.extend({
   id: boundedId.optional(),
-  ids: z.array(boundedId).min(1).max(4).transform((ids) => [...new Set(ids)]).optional()
+  ids: z.array(boundedId).min(1).max(maxWaitIdsPerCall).transform((ids) => [...new Set(ids)]).optional()
 }).refine((body) => (body.id !== undefined) !== (body.ids !== undefined), {
   message: "Provide exactly one of id or ids",
   path: ["ids"]
@@ -207,7 +228,7 @@ export const waitBodySchema = waitQuerySchema.extend({
 export const defaultWaitSeconds = 300;
 const waitSeconds = z.coerce.number().int().min(1).max(600);
 const untilField = z.enum(["playable", "complete"]);
-// Each batch of four IDs is one concurrent upstream call, so this caps them at five.
+// Up to 20 IDs means at most two concurrent upstream calls, with 12 IDs per call.
 const waitIds = z.array(boundedId).min(1).max(20).transform((ids) => [...new Set(ids)]);
 
 export const createQuerySchema = z.object({
@@ -275,11 +296,25 @@ export const downloadSchema = z.object({
 
 export const editSongSchema = z.object({
   title: z.string().optional(),
-  lyrics: z.string().optional()
-}).strict().refine((edit) => edit.title !== undefined || edit.lyrics !== undefined, {
-  message: "Provide title or lyrics",
+  lyrics: z.string().optional(),
+  caption: z.string().max(500).optional()
+}).strict().refine((edit) => edit.title !== undefined || edit.lyrics !== undefined || edit.caption !== undefined, {
+  message: "Provide title, lyrics or caption",
   path: ["title"]
 });
+
+export const songSettingsSchema = z.object({
+  visibility: z.enum(["public", "private"]).optional(),
+  can_remix: z.boolean().optional()
+}).strict().refine((settings) => settings.visibility !== undefined || settings.can_remix !== undefined, {
+  message: "Provide visibility or can_remix",
+  path: ["visibility"]
+});
+
+export const createStemsSchema = z.object({
+  mode: z.enum(["two", "twelve"]),
+  idempotency_key: idempotencyKey.optional()
+}).strict();
 
 export const voicesQuerySchema = z.object({
   collection: z.enum(["own", "loved"]).optional(),
