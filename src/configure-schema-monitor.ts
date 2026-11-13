@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { auth } from "@modelcontextprotocol/client";
 import {
-  listSchemaMonitorTools, parseSchemaAuthState, SchemaMonitorAuth, schemaMonitorEndpoint
+  listSchemaMonitorTools, parseSchemaAuthState, parseSchemaMonitorCallback, SchemaMonitorAuth, schemaMonitorEndpoint
 } from "./schema-monitor-auth.js";
 
 const repository = process.argv[2];
@@ -28,15 +28,14 @@ let provider: SchemaMonitorAuth;
 let resolveCallback: (value: { code: string; iss?: string }) => void;
 const callback = new Promise<{ code: string; iss?: string }>((resolve) => { resolveCallback = resolve; });
 const server = createServer((request, response) => {
-  const url = new URL(request.url ?? "/", "http://127.0.0.1");
-  const code = url.searchParams.get("code");
-  if (url.pathname !== "/callback" || url.searchParams.get("state") !== provider.oauthState || !code) {
+  const authorization = parseSchemaMonitorCallback(request.url ?? "/", provider?.oauthState);
+  if (!authorization) {
     response.writeHead(400).end("Authorization did not complete. Return to the terminal.");
     return;
   }
   response.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" })
     .end("Suno schema monitor authorized. You can return to Codex.");
-  resolveCallback({ code, iss: url.searchParams.get("iss") ?? undefined });
+  resolveCallback(authorization);
 });
 
 try {

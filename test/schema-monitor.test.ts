@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { auth } from "@modelcontextprotocol/client";
-import { decodeSchemaAuthState, SchemaMonitorAuth, schemaMonitorScope, type SchemaAuthState } from "../src/schema-monitor-auth.js";
+import { decodeSchemaAuthState, parseSchemaMonitorCallback, SchemaMonitorAuth, schemaMonitorScope, type SchemaAuthState } from "../src/schema-monitor-auth.js";
 import { decryptSchemaAuth, encryptSchemaAuth, findAuthArtifact } from "../src/schema-monitor-state.js";
 
 const seed = (): SchemaAuthState => ({
@@ -17,6 +17,27 @@ const seed = (): SchemaAuthState => ({
 });
 
 describe("schema monitor credentials", () => {
+  it("ignores malformed callback URLs and requests without the expected OAuth state", () => {
+    for (const target of [
+      "//[", "http://[", "/", "/callback", "/callback?code=test-code",
+      "/callback?code=test-code&state=wrong", "/callback?state=expected",
+      "/other?code=test-code&state=expected"
+    ]) {
+      assert.equal(parseSchemaMonitorCallback(target, "expected"), undefined, target);
+    }
+    assert.equal(parseSchemaMonitorCallback("/callback?code=test-code&state=expected", undefined), undefined);
+  });
+
+  it("still accepts the valid callback and preserves its issuer after malformed requests", () => {
+    assert.equal(parseSchemaMonitorCallback("//[", "expected"), undefined);
+    assert.deepEqual(parseSchemaMonitorCallback(
+      "/callback?code=test-code&state=expected&iss=https%3A%2F%2Fissuer.example", "expected"
+    ), { code: "test-code", iss: "https://issuer.example" });
+    assert.deepEqual(parseSchemaMonitorCallback("/callback?code=test-code&state=expected", "expected"), {
+      code: "test-code", iss: undefined
+    });
+  });
+
   it("rejects a public destination before starting OAuth or writing secrets", () => {
     const directory = mkdtempSync(join(tmpdir(), "schema-monitor-destination-"));
     try {

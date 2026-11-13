@@ -10,6 +10,25 @@ import type { SunoTool, JsonValue } from "./suno.js";
 export const schemaMonitorEndpoint = "https://api.suno.com/mcp";
 export const schemaMonitorScope = "api:v0 offline_access";
 
+/** Ignore malformed or unrelated requests while waiting for the OAuth callback. */
+export function parseSchemaMonitorCallback(
+  requestTarget: string,
+  expectedState: string | undefined
+): { code: string; iss?: string } | undefined {
+  if (!expectedState) return undefined;
+  let url: URL;
+  try {
+    url = new URL(requestTarget, "http://127.0.0.1");
+  } catch {
+    return undefined;
+  }
+  const code = url.searchParams.get("code");
+  if (url.pathname !== "/callback" || url.searchParams.get("state") !== expectedState || !code) {
+    return undefined;
+  }
+  return { code, iss: url.searchParams.get("iss") ?? undefined };
+}
+
 const objectWithString = (value: unknown, key: string) =>
   value !== null && typeof value === "object" &&
   typeof (value as Record<string, unknown>)[key] === "string";
