@@ -9,8 +9,6 @@
   "scripts": {
     "auth": "node --env-file=.env --import=tsx src/auth.ts",
     "check:schema": "node --env-file=.env --import=tsx src/check-schema.ts",
-    "check:schema:ci": "node --import=tsx src/check-schema.ts --json",
-    "setup:schema-monitor": "node --import=tsx src/configure-schema-monitor.ts",
     "dev": "node --env-file=.env --import=tsx src/server.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --import=tsx --test test/*.test.ts",
