@@ -111,19 +111,34 @@ export async function readBoundedMultipart(
   }
   if (!request.body) throw new BridgeError(400, "Missing multipart body");
 
-  const chunks: Buffer[] = [];
+  // Retain fixed-size blocks, not one Buffer per transfer chunk. Otherwise a
+  // fragmented upload can exhaust heap while staying below the byte limit.
+  const blocks: Buffer[] = [];
+  let block: Buffer | undefined;
+  let used = 0;
   let total = 0;
   const reader = request.body.getReader();
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      total += value.byteLength;
-      if (total > maxBytes) {
+      if (value.byteLength > maxBytes - total) {
         await reader.cancel();
         throw new BridgeError(413, "Upload exceeds MAX_UPLOAD_MB");
       }
-      chunks.push(Buffer.from(value));
+      let offset = 0;
+      while (offset < value.byteLength) {
+        if (!block || used === block.length) {
+          block = Buffer.allocUnsafe(Math.min(64 * 1024, maxBytes - total));
+          blocks.push(block);
+          used = 0;
+        }
+        const length = Math.min(block.length - used, value.byteLength - offset);
+        block.set(value.subarray(offset, offset + length), used);
+        used += length;
+        offset += length;
+        total += length;
+      }
     }
   } finally {
     reader.releaseLock();
@@ -134,7 +149,7 @@ export async function readBoundedMultipart(
     const localRequest = new Request("http://127.0.0.1/upload", {
       method: "POST",
       headers: { "Content-Type": contentType },
-      body: Buffer.concat(chunks, total)
+      body: Buffer.concat(blocks, total)
     });
     return await localRequest.formData();
   } catch {
