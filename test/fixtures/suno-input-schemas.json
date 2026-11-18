@@ -1,6 +1,6 @@
 {
   "endpoint": "https://api.suno.com/mcp",
-  "retrieved_at": "2026-11-07T04:38:57.060Z",
+  "retrieved_at": "2026-11-18T00:01:04.398Z",
   "tools": [
     {
       "name": "account-me",
@@ -729,6 +729,79 @@
       }
     },
     {
+      "name": "characters-list",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "presets": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "characters-save",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "image-create",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "aspect": {
+            "enum": [
+              "1:1",
+              "9:16",
+              "16:9"
+            ],
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "sequence_id": {
+            "type": "string"
+          },
+          "shot_id": {
+            "type": "string"
+          },
+          "takes": {
+            "maximum": 2,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "library-liked",
       "inputSchema": {
         "type": "object",
@@ -1012,6 +1085,463 @@
       }
     },
     {
+      "name": "sequence-create",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "aspect": {
+            "enum": [
+              "1:1",
+              "9:16",
+              "16:9"
+            ],
+            "type": "string"
+          },
+          "characters": {
+            "items": {
+              "properties": {
+                "asset_ids": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 3,
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "description": {
+                  "maxLength": 500,
+                  "type": "string"
+                },
+                "name": {
+                  "maxLength": 60,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "asset_ids"
+              ],
+              "type": "object"
+            },
+            "maxItems": 12,
+            "type": "array"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "lyrics": {
+            "default": false,
+            "type": "boolean"
+          },
+          "sets": {
+            "items": {
+              "properties": {
+                "asset_ids": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 3,
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "description": {
+                  "maxLength": 500,
+                  "type": "string"
+                },
+                "name": {
+                  "maxLength": 60,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "asset_ids"
+              ],
+              "type": "object"
+            },
+            "maxItems": 12,
+            "type": "array"
+          },
+          "shots": {
+            "items": {
+              "properties": {
+                "characters": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "duration_s": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 15,
+                  "type": "number"
+                },
+                "notes": {
+                  "maxLength": 1000,
+                  "type": "string"
+                },
+                "set": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "duration_s"
+              ],
+              "type": "object"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "type": "array"
+          },
+          "song_id": {
+            "type": "string"
+          },
+          "song_start_s": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "style": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "shots"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "sequence-export",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "sequence-generate",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "aspect": {
+            "enum": [
+              "1:1",
+              "9:16",
+              "16:9"
+            ],
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "resolution": {
+            "type": "string"
+          },
+          "shots": {
+            "items": {
+              "properties": {
+                "continues_shot_id": {
+                  "type": "string"
+                },
+                "first_frame_asset_id": {
+                  "type": "string"
+                },
+                "last_frame_asset_id": {
+                  "type": "string"
+                },
+                "leads_into_shot_id": {
+                  "type": "string"
+                },
+                "lip_sync": {
+                  "type": "boolean"
+                },
+                "prompt": {
+                  "type": "string"
+                },
+                "shot_id": {
+                  "type": "string"
+                },
+                "takes": {
+                  "maximum": 2,
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "shot_id",
+                "prompt"
+              ],
+              "type": "object"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "type": "array"
+          },
+          "step": {
+            "enum": [
+              "keyframes",
+              "clips"
+            ],
+            "type": "string"
+          },
+          "takes": {
+            "maximum": 2,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "step",
+          "shots"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "sequence-get",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "view": {
+            "default": "full",
+            "enum": [
+              "full",
+              "summary"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "sequence-list",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "limit": {
+            "maximum": 20,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "query": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "sequence-update",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "characters": {
+            "items": {
+              "properties": {
+                "asset_ids": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 3,
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "delete": {
+                  "type": "boolean"
+                },
+                "description": {
+                  "maxLength": 500,
+                  "type": "string"
+                },
+                "name": {
+                  "maxLength": 60,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "ops": {
+            "items": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "move",
+                    "delete",
+                    "trim",
+                    "split",
+                    "add"
+                  ],
+                  "type": "string"
+                },
+                "after_shot_id": {
+                  "type": "string"
+                },
+                "asset_id": {
+                  "type": "string"
+                },
+                "at_s": {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                "duration_s": {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                "notes": {
+                  "maxLength": 1000,
+                  "type": "string"
+                },
+                "shot_id": {
+                  "type": "string"
+                },
+                "trim_end_s": {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                "trim_start_s": {
+                  "minimum": 0,
+                  "type": "number"
+                }
+              },
+              "required": [
+                "action"
+              ],
+              "type": "object"
+            },
+            "maxItems": 49,
+            "type": "array"
+          },
+          "sets": {
+            "items": {
+              "properties": {
+                "asset_ids": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 3,
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "delete": {
+                  "type": "boolean"
+                },
+                "description": {
+                  "maxLength": 500,
+                  "type": "string"
+                },
+                "name": {
+                  "maxLength": 60,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "shots": {
+            "items": {
+              "properties": {
+                "asset_id": {
+                  "type": "string"
+                },
+                "characters": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "notes": {
+                  "maxLength": 1000,
+                  "type": "string"
+                },
+                "set": {
+                  "type": "string"
+                },
+                "shot_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "shot_id"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "style": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "view": {
+            "default": "full",
+            "enum": [
+              "full",
+              "changed"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
       "name": "sounds-create",
       "inputSchema": {
         "additionalProperties": false,
@@ -1137,6 +1667,332 @@
           }
         },
         "additionalProperties": false
+      }
+    },
+    {
+      "name": "video-assemble",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "aspect": {
+            "enum": [
+              "1:1",
+              "9:16",
+              "16:9"
+            ],
+            "type": "string"
+          },
+          "clips": {
+            "items": {
+              "properties": {
+                "asset_id": {
+                  "type": "string"
+                },
+                "duration_s": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 60,
+                  "type": "number"
+                },
+                "trim_end_s": {
+                  "type": "number"
+                },
+                "trim_start_s": {
+                  "minimum": 0,
+                  "type": "number"
+                }
+              },
+              "required": [
+                "asset_id"
+              ],
+              "type": "object"
+            },
+            "maxItems": 40,
+            "minItems": 1,
+            "type": "array"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "lyrics": {
+            "default": false,
+            "type": "boolean"
+          },
+          "song_id": {
+            "type": "string"
+          },
+          "song_start_s": {
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "song_id",
+          "clips"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "video-create",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "aspect": {
+            "enum": [
+              "1:1",
+              "9:16",
+              "16:9"
+            ],
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "duration_s": {
+            "maximum": 15,
+            "minimum": 5,
+            "type": "integer"
+          },
+          "first_frame_asset_id": {
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "last_frame_asset_id": {
+            "type": "string"
+          },
+          "lip_sync": {
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "resolution": {
+            "type": "string"
+          },
+          "sequence_id": {
+            "type": "string"
+          },
+          "shot_id": {
+            "type": "string"
+          },
+          "song_id": {
+            "type": "string"
+          },
+          "song_start_s": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "takes": {
+            "maximum": 2,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "visuals-download",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "visuals-library",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "liked": {
+            "type": "boolean"
+          },
+          "limit": {
+            "maximum": 50,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "media_type": {
+            "enum": [
+              "image",
+              "video"
+            ],
+            "type": "string"
+          },
+          "sequence_id": {
+            "type": "string"
+          },
+          "song_id": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "visuals-models",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "name": "visuals-show",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "ids": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "visuals-upload-complete",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "visuals-upload-consent",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "decisions": {
+            "items": {
+              "properties": {
+                "consent_key": {
+                  "type": "string"
+                },
+                "outcome": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "consent_key",
+                "version",
+                "outcome"
+              ],
+              "type": "object"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "decisions"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "visuals-upload-create",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "bytes": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "content_type": {
+            "enum": [
+              "image/jpeg",
+              "image/png",
+              "image/webp",
+              "image/bmp",
+              "video/mp4",
+              "video/quicktime",
+              "video/webm",
+              "video/x-msvideo",
+              "video/x-matroska",
+              "video/x-ms-wmv"
+            ],
+            "type": "string"
+          },
+          "file": {
+            "properties": {
+              "download_url": {
+                "type": "string"
+              },
+              "file_id": {
+                "type": "string"
+              },
+              "file_name": {
+                "type": "string"
+              },
+              "mime_type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "download_url",
+              "file_id"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "visuals-wait",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "ids": {
+            "type": "string"
+          },
+          "view": {
+            "default": "full",
+            "enum": [
+              "full",
+              "summary"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
       }
     },
     {
