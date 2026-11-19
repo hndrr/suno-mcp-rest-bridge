@@ -1,6 +1,6 @@
 {
   "endpoint": "https://api.suno.com/mcp",
-  "retrieved_at": "2026-11-18T00:01:04.398Z",
+  "retrieved_at": "2026-11-19T00:00:55.885Z",
   "tools": [
     {
       "name": "account-me",
@@ -788,11 +788,6 @@
           },
           "shot_id": {
             "type": "string"
-          },
-          "takes": {
-            "maximum": 2,
-            "minimum": 1,
-            "type": "integer"
           }
         },
         "required": [
@@ -1286,11 +1281,6 @@
                 },
                 "shot_id": {
                   "type": "string"
-                },
-                "takes": {
-                  "maximum": 2,
-                  "minimum": 1,
-                  "type": "integer"
                 }
               },
               "required": [
@@ -1309,11 +1299,6 @@
               "clips"
             ],
             "type": "string"
-          },
-          "takes": {
-            "maximum": 2,
-            "minimum": 1,
-            "type": "integer"
           }
         },
         "required": [
@@ -1792,11 +1777,6 @@
           "song_start_s": {
             "minimum": 0,
             "type": "number"
-          },
-          "takes": {
-            "maximum": 2,
-            "minimum": 1,
-            "type": "integer"
           }
         },
         "required": [
