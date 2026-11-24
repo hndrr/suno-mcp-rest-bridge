@@ -1,6 +1,6 @@
 {
   "endpoint": "https://api.suno.com/mcp",
-  "retrieved_at": "2026-11-19T00:00:55.885Z",
+  "retrieved_at": "2026-11-24T00:01:02.964Z",
   "tools": [
     {
       "name": "account-me",
@@ -70,6 +70,9 @@
               }
             },
             "type": "object"
+          },
+          "custom_model_id": {
+            "type": "string"
           },
           "duration": {
             "maximum": 360,
@@ -149,6 +152,9 @@
               }
             },
             "type": "object"
+          },
+          "custom_model_id": {
+            "type": "string"
           },
           "description": {
             "maxLength": 3000,
@@ -310,6 +316,9 @@
               }
             },
             "type": "object"
+          },
+          "custom_model_id": {
+            "type": "string"
           },
           "duration": {
             "maximum": 360,
@@ -486,6 +495,9 @@
               }
             },
             "type": "object"
+          },
+          "custom_model_id": {
+            "type": "string"
           },
           "duration": {
             "maximum": 360,
@@ -752,6 +764,37 @@
         "required": [
           "id"
         ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "custom-models-list",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "collection": {
+            "default": "own",
+            "enum": [
+              "own",
+              "shared"
+            ],
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "limit": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "query": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
         "type": "object"
       }
     },
