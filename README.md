@@ -1,4 +1,4 @@
-# [WIP] Suno MCP → REST API bridge (TypeScript / Hono)
+# Suno MCP → REST API bridge (TypeScript / Hono)
 
 An **unofficial, single-account local** REST adapter for Suno's **official MCP** endpoint at `https://api.suno.com/mcp`. Supports short samples, custom songs, speech, sound effects and loops, library search, audio and MIDI uploads, covers, mashups, extensions, full-song joining, stem separation, MIDI transcription, song settings, status polling and events, audio analysis and questions, downloads, voices, playlists and workspaces. **No unofficial Suno scraper or third-party Suno API is involved.**
 
