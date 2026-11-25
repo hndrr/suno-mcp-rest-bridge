@@ -161,6 +161,60 @@ MIDI変換は `POST /api/songs/CLIP_ID/midi` に `{}` または空の本文を�
 
 再生が始まった曲でも公開が保留される場合は、`publish_pending: true` と返却された `visibility` を確認します。Sunoは `can_remix` を先に変更するため、その後の公開が失敗した場合も `details` に変更済みの情報が含まれることがあります。ブリッジは自動再試行しません。
 
+## カスタムモデル
+
+`GET /api/custom-models` でカスタムモデルのIDを取得できます。`collection=own`（既定）または `collection=shared` で一覧を切り替え、`query`、`cursor`、`limit`（1〜100）も指定できます。曲・サンプル作成、カバー、延長、マッシュアップの本文に、選んだIDを `custom_model_id` として指定します。
+
+## 画像・動画の生成と待機
+
+`GET /api/visuals/models` でVisualsのモデルを確認できます。画像・動画・シーケンスの生成リクエストに `dry_run: true` を付けると、HTTP 200でSunoの見積もりが返ります。生成するには `dry_run` を省略するか `false` にします。HTTP 202の応答で受け取った生成IDを、待機リクエストの `ids` に文字列で指定します。
+
+```bash
+curl -sS http://127.0.0.1:8787/api/visuals/images \
+  -H 'Authorization: Bearer YOUR_KEY' -H 'Content-Type: application/json' \
+  -d '{"prompt":"夜の街に浮かぶ紙の月","aspect":"16:9","dry_run":true}'
+
+curl -sS http://127.0.0.1:8787/api/visuals/images \
+  -H 'Authorization: Bearer YOUR_KEY' -H 'Content-Type: application/json' \
+  -d '{"prompt":"夜の街に浮かぶ紙の月","aspect":"16:9","idempotency_key":"paper-moons-001"}'
+
+curl -sS http://127.0.0.1:8787/api/visuals/wait \
+  -H 'Authorization: Bearer YOUR_KEY' -H 'Content-Type: application/json' \
+  -d '{"ids":"GENERATION_ID","view":"summary"}'
+```
+
+`REQUIRE_IDEMPOTENCY_KEY=true` の場合、画像・動画・シーケンス素材の生成と動画の合成にキーが必要です。見積もりはキーなしで取得できます。使用できるモデルとVisualクレジットの残高はSunoが判定します。[SunoのVisualクレジット仕様](https://help.suno.com/en/articles/14661185)
+
+### 画像・動画のアップロード
+
+1. Sunoから同意を求められたら、Sunoが示した `consent_key` と `version`、利用者の回答 `outcome` を `decisions` 配列に入れ、`POST /api/visuals/uploads/consent` に送ります。
+2. `POST /api/visuals/uploads/sessions` にバイト数とメディアタイプを送ります。1024バイトのPNGなら `{"bytes":1024,"content_type":"image/png"}` です。
+3. 応答に含まれる署名付きアップロードの指示に従い、ファイルをストレージに直接送ります。転送後、返されたセッションIDで `POST /api/visuals/uploads/UPLOAD_ID/complete` を呼び出します。
+
+MCP添付ファイルの場合は、セッション作成時に `{"file":{"download_url":"ATTACHMENT_URL","file_id":"ATTACHMENT_ID"}}` を送ります。Sunoが添付を取り込み、ブリッジはSunoの応答をHTTP 202で返します。
+
+### VisualsのAPI
+
+| メソッド・パス | 内容 |
+|---|---|
+| `GET /api/visuals/models` | 画像・動画モデルの一覧 |
+| `GET /api/visuals/library` | 生成・アップロードした素材の一覧 |
+| `GET /api/visuals/show` | 生成結果や素材の詳細 |
+| `POST /api/visuals/wait` | `ids` に指定した生成の結果を待つ |
+| `POST /api/visuals/assets/:id/download` | 素材のダウンロード情報を取得 |
+| `GET /api/visuals/characters` | キャラクターの一覧。 `presets` で絞り込み可能 |
+| `POST /api/visuals/characters/:id/save` | キャラクターを保存 |
+| `POST /api/visuals/images` | 画像の生成・見積もり |
+| `POST /api/visuals/videos` | 動画の生成・見積もり |
+| `POST /api/visuals/videos/assemble` | 既存のクリップをつないで動画を作成 |
+| `GET`・`POST /api/visuals/sequences` | シーケンスの一覧・作成 |
+| `GET`・`PATCH /api/visuals/sequences/:id` | シーケンスの取得・編集 |
+| `POST /api/visuals/sequences/:id/generate` | キーフレームやクリップの生成・見積もり |
+| `POST /api/visuals/sequences/:id/export` | シーケンスの書き出し |
+| `POST /api/visuals/uploads/consent` | アップロード同意を記録 |
+| `POST /api/visuals/uploads/sessions` | 署名付きアップロード先を発行、またはMCP添付を取り込み |
+| `POST /api/visuals/uploads/:id/complete` | 署名付きアップロードの完了を通知 |
+
 ## その他のAPI
 
 | メソッド・パス | 内容 |
@@ -170,6 +224,7 @@ MIDI変換は `POST /api/songs/CLIP_ID/midi` に `{}` または空の本文を�
 | `GET /api/account/upgrade` | プラン変更・クレジット購入のリンク |
 | `GET /api/usage` | クレジット・プラン情報 |
 | `GET /api/models` | このアカウントで `model` に指定できるラベル |
+| `GET /api/custom-models` | `custom_model_id` に指定できるカスタムモデルの一覧 |
 | `GET /api/library?query=...` | 既存楽曲の検索・参照 |
 | `GET /api/library/liked` | いいね済みの曲 |
 | `POST /api/songs` | 通常生成。曲数はSuno側の既定値 |
@@ -228,7 +283,7 @@ Sunoのツールがリクエストを拒否した場合は、`details` にSuno�
 
 - **モデルの事前確認:** `model` がこのアカウントで使えない場合は、Sunoに送らず400を返します。クレジットは消費しません。
 - **生成して待つ:** `/api/songs`、`/api/samples`、`/api/speech`、`/api/sounds`、`/cover`、`/mashup`、`/extend` に `?wait=playable` または `?wait=complete` を付けると、作成から待機までを1リクエストで行います。`timeout` は1〜600秒で、既定は300秒です。待機が失敗やタイムアウトになっても、作成済みの `created` と `pending` を202で返します。
-- **クレジット上限:** `.env` の `MIN_CREDITS_REMAINING` を設定すると、残高がこの値を下回ったときに402を返して生成を止めます。残高を読めない場合は502で拒否します。
+- **楽曲クレジットの残高下限:** `.env` の `MIN_CREDITS_REMAINING` を設定すると、楽曲用の残高がこの値を下回ったときに402を返して生成を止めます。残高を読めない場合は502で拒否します。
 - **冪等キーの必須化:** `REQUIRE_IDEMPOTENCY_KEY=true` にすると、`idempotency_key` のない生成リクエストに400を返します。
 - **ダウンロードの確認:** `requires_credit` が返ったら、ユーザーの承認を得てから `"confirm":true` で再度呼びます。ブリッジが自動で `confirm` を付けることはありません。
 
