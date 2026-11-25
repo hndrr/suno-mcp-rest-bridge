@@ -5,23 +5,30 @@ import { z } from "zod";
 import { previewHeaders, previewPath, renderPreviewPage, withEmbedUrls } from "./embed.js";
 import type { JsonObject, JsonValue, SunoTool } from "./suno.js";
 import {
+  assembleVideoSchema,
+  charactersQuerySchema,
   createCoverSchema,
   createExtensionSchema,
+  createImageSchema,
   createMashupSchema,
   createPlaylistSchema,
   createQuerySchema,
   createSampleSchema,
+  createSequenceSchema,
   createSongSchema,
   createSoundSchema,
   createSpeechSchema,
   createStemsSchema,
+  createVideoSchema,
   createWorkspaceSchema,
+  customModelsQuerySchema,
   defaultWaitSeconds,
   downloadSchema,
   editSongSchema,
   emptyBodySchema,
   eventsQuerySchema,
   fullSongSchema,
+  generateSequenceSchema,
   libraryQuerySchema,
   likeSchema,
   likedQuerySchema,
@@ -31,10 +38,18 @@ import {
   playlistClipsSchema,
   playlistsQuerySchema,
   previewQuerySchema,
+  sequenceQuerySchema,
+  sequencesQuerySchema,
   songSettingsSchema,
+  updateSequenceSchema,
   updateWorkspaceClipsSchema,
   uploadCreateSchema,
   uploadSessionSchema,
+  visualLibraryQuerySchema,
+  visualShowQuerySchema,
+  visualUploadConsentSchema,
+  visualUploadCreateSchema,
+  visualWaitSchema,
   voicesQuerySchema,
   waitAllSchema,
   waitBodySchema,
@@ -196,14 +211,18 @@ export function createApp({
     withEmbedUrls(await tools.callTool(name, args));
   const app = new Hono();
 
-  // A guard that can't read the account refuses rather than spending credits unchecked.
-  const guardCharge = async ({ model, idempotency_key }: ChargeableArgs, supportsIdempotencyKey = true) => {
-    if (requireIdempotencyKey && supportsIdempotencyKey && !idempotency_key) {
+  const requireGenerationKey = (key: string | undefined) => {
+    if (requireIdempotencyKey && !key) {
       throw new BridgeError(400, "Invalid request", [{
         path: "idempotency_key",
         message: "REQUIRE_IDEMPOTENCY_KEY is on; send a unique idempotency_key"
       }]);
     }
+  };
+
+  // A guard that can't read the account refuses rather than spending credits unchecked.
+  const guardCharge = async ({ model, idempotency_key }: ChargeableArgs, supportsIdempotencyKey = true) => {
+    if (supportsIdempotencyKey) requireGenerationKey(idempotency_key);
     if (!model && minCreditsRemaining === undefined) return;
     const usage = fields(await callTool("account-usage", {}));
     if (model && Array.isArray(usage.allowed_models) && !usage.allowed_models.includes(model)) {
@@ -246,6 +265,16 @@ export function createApp({
     );
   };
 
+  const generateVisual = async (
+    c: Context,
+    tool: string,
+    args: Record<string, unknown> & { dry_run?: boolean; idempotency_key?: string }
+  ) => {
+    // Suno validates Visual models and balance separately from account-usage's song credits.
+    if (!args.dry_run) requireGenerationKey(args.idempotency_key);
+    return c.json(await tools.callTool(tool, args), args.dry_run ? 200 : 202);
+  };
+
   app.get("/", (c) => c.json({
     service: "suno-mcp-rest-bridge",
     health: "/health",
@@ -256,11 +285,16 @@ export function createApp({
       account: "/api/account",
       usage: "/api/usage",
       models: "/api/models",
+      customModels: "/api/custom-models",
       library: "/api/library",
       voices: "/api/voices",
       playlists: "/api/playlists",
       workspaces: "/api/workspaces",
       sounds: "/api/sounds",
+      visualModels: "/api/visuals/models",
+      visualLibrary: "/api/visuals/library",
+      visualCharacters: "/api/visuals/characters",
+      visualSequences: "/api/visuals/sequences",
       midiUploads: "/api/midi/uploads/sessions"
     },
     operations: {
@@ -273,6 +307,10 @@ export function createApp({
       settings: { method: "PATCH", path: "/api/songs/:id/settings" },
       stems: { method: "POST", path: "/api/songs/:id/stems" },
       stemsRetrieve: { method: "GET", path: "/api/songs/:id/stems/:group_id" },
+      visualImageCreate: { method: "POST", path: "/api/visuals/images" },
+      visualVideoCreate: { method: "POST", path: "/api/visuals/videos" },
+      visualWait: { method: "POST", path: "/api/visuals/wait" },
+      visualUpload: { method: "POST", path: "/api/visuals/uploads/sessions" },
       midiUploadComplete: { method: "POST", path: "/api/midi/uploads/:id/complete" }
     }
   }));
@@ -301,6 +339,9 @@ export function createApp({
     const usage = fields(await callTool("account-usage", {}));
     return c.json({ allowed_models: Array.isArray(usage.allowed_models) ? usage.allowed_models : [] });
   });
+  app.get("/api/custom-models", async (c) =>
+    c.json(await callTool("custom-models-list", parse(customModelsQuerySchema, queryObject(c))))
+  );
 
   // Register collection endpoints before song-id endpoints for easy discovery.
   app.get("/api/library", async (c) => {
@@ -558,6 +599,82 @@ export function createApp({
       id: validId(c.req.param("id"))
     }), 202)
   );
+
+  app.get("/api/visuals/characters", async (c) =>
+    c.json(await tools.callTool("characters-list", parse(charactersQuerySchema, queryObject(c))))
+  );
+  app.post("/api/visuals/characters/:id/save", async (c) => {
+    parse(emptyBodySchema, await jsonBody(c, true));
+    return c.json(await tools.callTool("characters-save", { id: validId(c.req.param("id")) }));
+  });
+
+  app.get("/api/visuals/models", async (c) =>
+    c.json(await tools.callTool("visuals-models", parse(emptyBodySchema, queryObject(c))))
+  );
+  app.get("/api/visuals/library", async (c) =>
+    c.json(await tools.callTool("visuals-library", parse(visualLibraryQuerySchema, queryObject(c))))
+  );
+  app.get("/api/visuals/show", async (c) =>
+    c.json(await tools.callTool("visuals-show", parse(visualShowQuerySchema, queryObject(c))))
+  );
+  app.post("/api/visuals/wait", async (c) =>
+    c.json(await tools.callTool("visuals-wait", parse(visualWaitSchema, await jsonBody(c, true))))
+  );
+  app.post("/api/visuals/assets/:id/download", async (c) => {
+    parse(emptyBodySchema, await jsonBody(c, true));
+    return c.json(await tools.callTool("visuals-download", { id: validId(c.req.param("id")) }));
+  });
+
+  app.post("/api/visuals/images", async (c) =>
+    generateVisual(c, "image-create", parse(createImageSchema, await jsonBody(c)))
+  );
+  app.post("/api/visuals/videos", async (c) =>
+    generateVisual(c, "video-create", parse(createVideoSchema, await jsonBody(c)))
+  );
+  app.post("/api/visuals/videos/assemble", async (c) =>
+    generateVisual(c, "video-assemble", parse(assembleVideoSchema, await jsonBody(c)))
+  );
+
+  app.get("/api/visuals/sequences", async (c) =>
+    c.json(await tools.callTool("sequence-list", parse(sequencesQuerySchema, queryObject(c))))
+  );
+  app.post("/api/visuals/sequences", async (c) =>
+    c.json(await tools.callTool("sequence-create", parse(createSequenceSchema, await jsonBody(c))), 201)
+  );
+  app.get("/api/visuals/sequences/:id", async (c) =>
+    c.json(await tools.callTool("sequence-get", {
+      ...parse(sequenceQuerySchema, queryObject(c)),
+      id: validId(c.req.param("id"))
+    }))
+  );
+  app.patch("/api/visuals/sequences/:id", async (c) =>
+    c.json(await tools.callTool("sequence-update", {
+      ...parse(updateSequenceSchema, await jsonBody(c, true)),
+      id: validId(c.req.param("id"))
+    }))
+  );
+  app.post("/api/visuals/sequences/:id/generate", async (c) =>
+    generateVisual(c, "sequence-generate", {
+      ...parse(generateSequenceSchema, await jsonBody(c)),
+      id: validId(c.req.param("id"))
+    })
+  );
+  app.post("/api/visuals/sequences/:id/export", async (c) => {
+    parse(emptyBodySchema, await jsonBody(c, true));
+    return c.json(await tools.callTool("sequence-export", { id: validId(c.req.param("id")) }), 202);
+  });
+
+  app.post("/api/visuals/uploads/consent", async (c) =>
+    c.json(await tools.callTool("visuals-upload-consent", parse(visualUploadConsentSchema, await jsonBody(c))))
+  );
+  app.post("/api/visuals/uploads/sessions", async (c) => {
+    const args = parse(visualUploadCreateSchema, await jsonBody(c, true));
+    return c.json(await tools.callTool("visuals-upload-create", args), args.file ? 202 : 201);
+  });
+  app.post("/api/visuals/uploads/:id/complete", async (c) => {
+    parse(emptyBodySchema, await jsonBody(c, true));
+    return c.json(await tools.callTool("visuals-upload-complete", { id: validId(c.req.param("id")) }), 202);
+  });
 
   app.post("/api/tools/:name/call", async (c) => {
     const name = c.req.param("name");

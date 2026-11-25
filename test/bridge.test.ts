@@ -1109,6 +1109,30 @@ describe("model and credit guards", () => {
     assert.equal(unknown.calls.at(-1)?.args.model, "v7");
   });
 
+  it("forwards an optional custom model ID on song, sample and remix routes", async () => {
+    const routes = [
+      { path: "/api/songs", name: "audio-create", body: { description: "Instrumental jazz" } },
+      { path: "/api/samples", name: "audio-create", body: { instrumental: true } },
+      { path: "/api/songs/source/cover", name: "audio-covers-create", body: {} },
+      { path: "/api/songs/source/extend", name: "audio-extensions-create", body: { continue_at: 4 } },
+      { path: "/api/songs/source/mashup", name: "audio-mashups-create", body: { additional_audio_id: "second" } }
+    ];
+    const { post, calls } = harness();
+    for (const { path, name, body } of routes) {
+      assert.equal((await post(path, body)).status, 202, path);
+      const original = calls.at(-1)!;
+      assert.equal(original.name, name);
+      assert.equal(Object.hasOwn(original.args, "custom_model_id"), false);
+
+      const custom_model_id = "my-custom-model";
+      assert.equal((await post(path, { ...body, custom_model_id })).status, 202, path);
+      assert.deepEqual(calls.at(-1), { name, args: { ...original.args, custom_model_id } });
+      const before = calls.length;
+      assert.equal((await post(path, { ...body, custom_model_id: 42 })).status, 400, path);
+      assert.equal(calls.length, before);
+    }
+  });
+
   it("skips the account lookup when no guard needs it", async () => {
     const { post, calls } = harness();
     assert.equal((await post("/api/songs", { instrumental: true })).status, 202);
@@ -1150,6 +1174,225 @@ describe("model and credit guards", () => {
     assert.equal(calls.length, 0);
     assert.equal((await post("/api/songs", { instrumental: true, idempotency_key: "one" })).status, 202);
     assert.equal(calls.at(-1)?.args.idempotency_key, "one");
+  });
+});
+
+describe("custom models and Visuals routes", () => {
+  const generateShots = { step: "clips", shots: [{ shot_id: "shot-1", prompt: "Moving lights" }] };
+  const consent = { decisions: [{ consent_key: "visual_upload", version: 1, outcome: "accepted" }] };
+  const upload = { bytes: 1024, content_type: "image/png" };
+  const routes: Array<{
+    method: "GET" | "POST" | "PATCH";
+    path: string;
+    name: string;
+    status?: 201 | 202;
+    body?: Record<string, unknown>;
+    args?: Record<string, unknown>;
+  }> = [
+    {
+      method: "GET", path: "/api/custom-models?collection=shared&cursor=next&limit=100&query=jazz",
+      name: "custom-models-list", args: { collection: "shared", cursor: "next", limit: 100, query: "jazz" }
+    },
+    { method: "GET", path: "/api/visuals/characters?presets=false", name: "characters-list", args: { presets: false } },
+    { method: "POST", path: "/api/visuals/characters/char-1/save", name: "characters-save", args: { id: "char-1" } },
+    { method: "GET", path: "/api/visuals/models", name: "visuals-models" },
+    {
+      method: "GET", path: "/api/visuals/library?limit=50&media_type=image&liked=true&sequence_id=seq-1&song_id=song-1&cursor=next",
+      name: "visuals-library", args: { limit: 50, media_type: "image", liked: true, sequence_id: "seq-1", song_id: "song-1", cursor: "next" }
+    },
+    {
+      method: "GET", path: "/api/visuals/show?ids=gen-1%2Cgen-2&at=00%3A02",
+      name: "visuals-show", args: { ids: "gen-1,gen-2", at: "00:02" }
+    },
+    { method: "POST", path: "/api/visuals/wait", name: "visuals-wait", body: { ids: "gen-1,gen-2", view: "summary" } },
+    { method: "POST", path: "/api/visuals/assets/a-1/download", name: "visuals-download", args: { id: "a-1" } },
+    {
+      method: "POST", path: "/api/visuals/images", name: "image-create", status: 202,
+      body: { prompt: "Paper moons", aspect: "1:1", model: "image-model", sequence_id: "seq-1", shot_id: "shot-1" }
+    },
+    {
+      method: "POST", path: "/api/visuals/videos", name: "video-create", status: 202,
+      body: { prompt: "Paper moons", duration_s: 5, song_id: "song-1", lip_sync: false, first_frame_asset_id: "a-1" }
+    },
+    {
+      method: "POST", path: "/api/visuals/videos/assemble", name: "video-assemble", status: 202,
+      body: { song_id: "song-1", clips: [{ asset_id: "a-1", trim_start_s: 0.5, trim_end_s: 2.5 }], lyrics: false }
+    },
+    {
+      method: "GET", path: "/api/visuals/sequences?query=moons&limit=20&cursor=next",
+      name: "sequence-list", args: { query: "moons", limit: 20, cursor: "next" }
+    },
+    {
+      method: "POST", path: "/api/visuals/sequences", name: "sequence-create", status: 201,
+      body: {
+        characters: [{ name: "Moon", asset_ids: ["a-1"] }],
+        sets: [{ name: "Sky", asset_ids: ["a-2"] }],
+        shots: [{ duration_s: 2.5, characters: ["Moon"], set: "Sky" }],
+        style: { typography: { family: "serif" }, colors: ["blue"] },
+        idempotency_key: "create-sequence"
+      }
+    },
+    { method: "GET", path: "/api/visuals/sequences/seq-1?view=summary", name: "sequence-get", args: { id: "seq-1", view: "summary" } },
+    {
+      method: "PATCH", path: "/api/visuals/sequences/seq-1", name: "sequence-update",
+      body: { view: "changed", ops: [{ action: "split", shot_id: "shot-1", at_s: 1.25 }] },
+      args: { id: "seq-1", view: "changed", ops: [{ action: "split", shot_id: "shot-1", at_s: 1.25 }] }
+    },
+    {
+      method: "POST", path: "/api/visuals/sequences/seq-1/generate", name: "sequence-generate", status: 202,
+      body: generateShots, args: { ...generateShots, id: "seq-1" }
+    },
+    { method: "POST", path: "/api/visuals/sequences/seq-1/export", name: "sequence-export", status: 202, args: { id: "seq-1" } },
+    { method: "POST", path: "/api/visuals/uploads/consent", name: "visuals-upload-consent", body: consent },
+    { method: "POST", path: "/api/visuals/uploads/sessions", name: "visuals-upload-create", body: upload, status: 201 },
+    { method: "POST", path: "/api/visuals/uploads/upload-1/complete", name: "visuals-upload-complete", status: 202, args: { id: "upload-1" } }
+  ];
+
+  for (const { method, path, name, status, body, args: expectedArgs } of routes) {
+    it(`authenticates and dispatches ${method} ${path} to ${name}`, async () => {
+      const { app, url, send, calls } = harness();
+      assert.equal((await app.request(url(path), { method })).status, 401);
+      assert.deepEqual(calls, []);
+
+      const response = await send(method, path, body);
+      const args = expectedArgs ?? body ?? {};
+      assert.equal(response.status, status ?? 200);
+      assert.deepEqual(calls, [{ name, args }]);
+      assert.deepEqual(await response.json(), { ok: true, name, args });
+    });
+  }
+
+  it("leaves omitted defaults to Suno", async () => {
+    const { get, post, calls } = harness();
+    assert.equal((await get("/api/custom-models")).status, 200);
+    assert.equal((await get("/api/visuals/sequences/seq-1")).status, 200);
+    assert.equal((await post("/api/visuals/wait", { ids: "gen-1" })).status, 200);
+    assert.deepEqual(calls, [
+      { name: "custom-models-list", args: {} },
+      { name: "sequence-get", args: { id: "seq-1" } },
+      { name: "visuals-wait", args: { ids: "gen-1" } }
+    ]);
+  });
+
+  it("rejects invalid queries, request bodies and nested limits before calling Suno", async () => {
+    const { send, calls } = harness();
+    const invalid: Array<[string, string, unknown?]> = [
+      ["GET", "/api/custom-models?limit=101"],
+      ["GET", "/api/custom-models?collection=team"],
+      ["GET", "/api/visuals/characters?presets=1"],
+      ["GET", "/api/visuals/library?limit=51"],
+      ["GET", "/api/visuals/sequences?limit=21"],
+      ["POST", "/api/visuals/wait", { ids: ["gen-1"] }],
+      ["POST", "/api/visuals/wait", { ids: "gen-1", until: "complete" }],
+      ["POST", "/api/visuals/images", { aspect: "1:1" }],
+      ["POST", "/api/visuals/videos", { prompt: "Moons", duration_s: 4 }],
+      ["POST", "/api/visuals/videos/assemble", { song_id: "s", clips: Array(41).fill({ asset_id: "a" }) }],
+      ["POST", "/api/visuals/sequences", { shots: [{ duration_s: 0 }] }],
+      ["POST", "/api/visuals/sequences", { shots: Array(201).fill({ duration_s: 1 }) }],
+      ["POST", "/api/visuals/sequences", { shots: [{ duration_s: 1 }], sets: [{ name: "Sky", asset_ids: [] }] }],
+      ["POST", "/api/visuals/sequences/s/generate", { step: "clips", shots: Array(9).fill(generateShots.shots[0]) }],
+      ["POST", "/api/visuals/sequences/s/generate", { step: "clips", shots: [{ shot_id: "shot-1" }] }],
+      ["PATCH", "/api/visuals/sequences/s", { ops: Array(50).fill({ action: "delete", shot_id: "shot-1" }) }],
+      ["PATCH", "/api/visuals/sequences/s", { id: "other" }],
+      ["POST", "/api/visuals/uploads/consent", { decisions: [] }],
+      ["POST", "/api/visuals/uploads/consent", { decisions: [{ consent_key: "visual_upload", version: 1 }] }],
+      ["POST", "/api/visuals/uploads/sessions", { bytes: 0, content_type: "image/png" }],
+      ["POST", "/api/visuals/uploads/sessions", { bytes: 1024, content_type: "audio/wav" }],
+      ["POST", "/api/visuals/uploads/sessions", { file: { download_url: "https://example.net/attachment" } }]
+    ];
+    for (const [method, path, body] of invalid) {
+      assert.equal((await send(method, path, body)).status, 400, `${method} ${path}`);
+    }
+    assert.deepEqual(calls, []);
+  });
+
+  it("requires keys for Visual generation and assembly without consulting song credits", async () => {
+    const { post, calls } = harness({
+      options: { minCreditsRemaining: 101, requireIdempotencyKey: true },
+      toolResults: { "account-usage": usage }
+    });
+    const generation = [
+      { path: "/api/visuals/images", name: "image-create", body: { prompt: "Moons", model: "visual-image-model" } },
+      { path: "/api/visuals/videos", name: "video-create", body: { prompt: "Moons", model: "visual-video-model" } },
+      { path: "/api/visuals/sequences/seq-1/generate", name: "sequence-generate", body: generateShots },
+      { path: "/api/visuals/videos/assemble", name: "video-assemble", body: { song_id: "song-1", clips: [{ asset_id: "a-1" }] } }
+    ];
+    for (const { path, body } of generation) {
+      const response = await post(path, body);
+      assert.equal(response.status, 400, path);
+      const error = await response.json() as { issues: Array<{ path: string }> };
+      assert.equal(error.issues[0]?.path, "idempotency_key");
+    }
+    assert.deepEqual(calls, []);
+    for (const { path, body, name } of generation) {
+      const idempotency_key = `once-${name}`;
+      assert.equal((await post(path, { ...body, idempotency_key })).status, 202, path);
+      assert.equal(calls.at(-1)?.args.idempotency_key, idempotency_key);
+    }
+    assert.deepEqual(calls.map(({ name }) => name), generation.map(({ name }) => name));
+  });
+
+  it("returns a dry-run quote without a key, and maps a Suno balance rejection on generation", async () => {
+    const quote = { dry_run: true, credits: 4, visuals_credits_remaining: 0 };
+    const insufficient = { code: "insufficient_credits", message: "Visual balance too low" };
+    const { post, calls } = harness({
+      options: { minCreditsRemaining: 101, requireIdempotencyKey: true },
+      toolResults: {
+        "image-create": ({ dry_run }) => {
+          if (dry_run) return quote;
+          throw new SunoToolError(insufficient);
+        },
+        "video-create": quote,
+        "sequence-generate": quote
+      }
+    });
+    const image = { prompt: "Moons", model: "visual-image-model" };
+    const quotes = [
+      { path: "/api/visuals/images", body: image, name: "image-create" },
+      { path: "/api/visuals/videos", body: { prompt: "Moons" }, name: "video-create" },
+      { path: "/api/visuals/sequences/seq-1/generate", body: generateShots, name: "sequence-generate" }
+    ];
+    for (const { path, body, name } of quotes) {
+      const response = await post(path, { ...body, dry_run: true });
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), quote);
+      assert.equal(calls.at(-1)?.name, name);
+      assert.equal(calls.at(-1)?.args.dry_run, true);
+    }
+    const response = await post("/api/visuals/images", { ...image, dry_run: false, idempotency_key: "create-image" });
+    assert.equal(response.status, 402);
+    assert.deepEqual(await response.json(), { error: "Suno MCP tool failed", details: insufficient });
+    assert.deepEqual(calls.map(({ name }) => name), ["image-create", "video-create", "sequence-generate", "image-create"]);
+  });
+
+  it("passes Visual upload consent, session data and completion through as separate requests", async () => {
+    const session = { id: "upload-1", upload_url: "https://example.net/signed-url", headers: { "content-type": "image/png" } };
+    const completed = { asset_id: "a-1" };
+    const { post, calls, uploaded } = harness({
+      toolResults: {
+        "visuals-upload-create": ({ file }) => file ? completed : session,
+        "visuals-upload-complete": completed
+      }
+    });
+    assert.equal((await post("/api/visuals/uploads/consent", consent)).status, 200);
+    const start = await post("/api/visuals/uploads/sessions", upload);
+    assert.equal(start.status, 201);
+    assert.deepEqual(await start.json(), session);
+    const finish = await post("/api/visuals/uploads/upload-1/complete", {});
+    assert.equal(finish.status, 202);
+    assert.deepEqual(await finish.json(), completed);
+
+    const file = { file_id: "f-1", download_url: "https://example.net/attachment", provider: "mcp" };
+    const attached = await post("/api/visuals/uploads/sessions", { file });
+    assert.equal(attached.status, 202);
+    assert.deepEqual(await attached.json(), completed);
+    assert.deepEqual(calls, [
+      { name: "visuals-upload-consent", args: consent },
+      { name: "visuals-upload-create", args: upload },
+      { name: "visuals-upload-complete", args: { id: "upload-1" } },
+      { name: "visuals-upload-create", args: { file } }
+    ]);
+    assert.deepEqual(uploaded, []);
   });
 });
 

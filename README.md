@@ -2,6 +2,8 @@
 
 An **unofficial, single-account local** REST adapter for Suno's **official MCP** endpoint at `https://api.suno.com/mcp`. Supports short samples, custom songs, speech, sound effects and loops, library search, audio and MIDI uploads, covers, mashups, extensions, full-song joining, stem separation, MIDI transcription, song settings, status polling and events, audio analysis and questions, downloads, voices, playlists and workspaces. **No unofficial Suno scraper or third-party Suno API is involved.**
 
+The bridge also supports custom music models and Suno Visuals for images, videos, characters and sequences.
+
 - **Node.js 22+**, TypeScript, Hono, maintained MCP TypeScript SDK v2 (`@modelcontextprotocol/client`)
 - `mcp-remote` handles Suno's browser-based OAuth; tokens are **not** the bridge's `API_KEY`
 - Your linked Suno account and **Suno credits** are used; this is not the separate Suno Platform REST API
@@ -52,6 +54,7 @@ export API_KEY=YOUR_LOCAL_API_KEY
 | GET | `/api/account/upgrade` | `account-upgrade` | Link to upgrade the plan or buy credits |
 | GET | `/api/usage` | `account-usage` | Plan/credits |
 | GET | `/api/models` | `account-usage` | Model labels this account may send as `model` |
+| GET | `/api/custom-models` | `custom-models-list` | List custom models for use as `custom_model_id` |
 | POST | `/api/songs` | `audio-create` | Generate audio; clip count follows Suno's defaults |
 | POST | `/api/samples` | `audio-create` | Generate **15–60s** samples, defaults to **15s** and strict duration |
 | POST | `/api/speech` | `speech-create` | Generate speech from a `script` or a `prompt`; always uses the default model |
@@ -89,6 +92,23 @@ export API_KEY=YOUR_LOCAL_API_KEY
 | POST | `/api/songs/:id/mashup` | `audio-mashups-create` | Blend two completed clips |
 | POST | `/api/songs/:id/extend` | `audio-extensions-create` | Extend from `continue_at` seconds |
 | POST | `/api/songs/:id/full-song` | `audio-full-song` | Join extension chain; no generation credits for joining |
+| GET | `/api/visuals/models` | `visuals-models` | List image and video models |
+| GET | `/api/visuals/library` | `visuals-library` | Browse or filter Visuals assets |
+| GET | `/api/visuals/show` | `visuals-show` | Inspect visual generations and assets |
+| POST | `/api/visuals/wait` | `visuals-wait` | Wait for Visuals results by `ids` |
+| POST | `/api/visuals/assets/:id/download` | `visuals-download` | Get download information for an asset |
+| GET | `/api/visuals/characters` | `characters-list` | List characters with an optional `presets` filter |
+| POST | `/api/visuals/characters/:id/save` | `characters-save` | Save a character |
+| POST | `/api/visuals/images` | `image-create` | Generate an image or quote its cost |
+| POST | `/api/visuals/videos` | `video-create` | Generate a video or quote its cost |
+| POST | `/api/visuals/videos/assemble` | `video-assemble` | Assemble existing clips into a video |
+| GET, POST | `/api/visuals/sequences` | `sequence-list`, `sequence-create` | List or create sequences |
+| GET, PATCH | `/api/visuals/sequences/:id` | `sequence-get`, `sequence-update` | Read or edit a sequence |
+| POST | `/api/visuals/sequences/:id/generate` | `sequence-generate` | Generate sequence keyframes or clips, or quote their cost |
+| POST | `/api/visuals/sequences/:id/export` | `sequence-export` | Export a sequence |
+| POST | `/api/visuals/uploads/consent` | `visuals-upload-consent` | Record explicit upload decisions |
+| POST | `/api/visuals/uploads/sessions` | `visuals-upload-create` | Start a signed upload or process an MCP attachment |
+| POST | `/api/visuals/uploads/:id/complete` | `visuals-upload-complete` | Finalize a signed upload |
 | POST | `/api/tools/:name/call` | allowlisted tool | Raw arguments for explicitly allowlisted MCP tools |
 
 MCP tool names may use hyphens or underscores; the adapter accepts both. The `ALLOWED_TOOLS` setting governs the **generic endpoint only**: dedicated routes above are available to an authorized caller independently. Inspect `/api/tools` for the list granted to your account.
@@ -271,6 +291,8 @@ curl -sS "$BASE/api/models" -H "Authorization: Bearer $API_KEY"
 
 Send one of the returned labels as `model` when you generate. The bridge checks it first and returns 400 with the allowed labels if this account doesn't hold it, so no credits are spent. If you omit `model`, Suno uses your plan's default, which the MCP doesn't name; set `model` explicitly when results must stay on one model.
 
+Use `GET /api/custom-models` to find custom model IDs. It accepts `collection=own` (default) or `collection=shared`, plus `query`, `cursor` and `limit` (1–100). Send the selected ID as `custom_model_id` in a song, sample, cover, extension or mashup request.
+
 ## 8. Generate and wait in one request
 
 Add `?wait=playable` or `?wait=complete` to `/api/songs`, `/api/samples`, `/api/speech`, `/api/sounds`, `/cover`, `/mashup` or `/extend`:
@@ -308,7 +330,7 @@ The stream polls for this connection only. The bridge keeps no job state, so a r
 
 Set these in `.env`; both apply to `/api/songs`, `/api/samples`, `/api/speech`, `/api/sounds`, `/cover`, `/mashup` and `/extend`:
 
-- `MIN_CREDITS_REMAINING`: returns 402 instead of generating when the balance is below this value. It reads the balance before each request and doesn't know what the request will cost, so the balance can still end up below the value. If the balance can't be read, the request is refused with 502. A retry with the same `idempotency_key` is refused too once the balance is too low.
+- `MIN_CREDITS_REMAINING`: returns 402 instead of generating when the song-credit balance is below this value. It reads the balance before each request and doesn't know what the request will cost, so the balance can still end up below the value. If the balance can't be read, the request is refused with 502. A retry with the same `idempotency_key` is refused too once the balance is too low.
 - `REQUIRE_IDEMPOTENCY_KEY=true`: returns 400 when a request has no `idempotency_key`, which protects against double charges when a client retries after a timeout.
 
 ## 11. Download a song
@@ -411,10 +433,38 @@ For transcription, repeatedly call `POST /api/songs/CLIP_ID/midi` with an empty 
 
 Suno can defer publication of a streaming song: preserve `publish_pending: true` and inspect its returned visibility. It applies `can_remix` first, so if publishing then fails, inspect the error's `details` for a change already made; the bridge does not retry automatically.
 
+## Generate and wait for Visuals
+
+Use `GET /api/visuals/models` for model selection. Image creation, video creation and sequence generation accept `dry_run: true` to return Suno's estimate with HTTP 200. To generate, omit `dry_run` or send `false`. A generation request returns HTTP 202 with Suno's result. Use the returned generation ID as a string in `POST /api/visuals/wait`.
+
+```bash
+curl -sS "$BASE/api/visuals/images" \
+  -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+  -d '{"prompt":"Paper moons over a city","aspect":"16:9","dry_run":true}'
+
+curl -sS "$BASE/api/visuals/images" \
+  -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+  -d '{"prompt":"Paper moons over a city","aspect":"16:9","idempotency_key":"paper-moons-001"}'
+
+curl -sS "$BASE/api/visuals/wait" \
+  -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+  -d '{"ids":"GENERATION_ID","view":"summary"}'
+```
+
+When `REQUIRE_IDEMPOTENCY_KEY=true`, requests that generate images, videos or sequence media, as well as video assembly requests, require a key. Quotes can be requested without a key. Suno validates the selected Visual model and handles the separate [Visual credit balance](https://help.suno.com/en/articles/14661185).
+
+### Upload an image or video
+
+1. If Suno requests upload consent, send the user's explicit decisions to `POST /api/visuals/uploads/consent`. Use Suno's `consent_key` and `version` and the user's `outcome` in the `decisions` array.
+2. Send the file size in bytes and media type to `POST /api/visuals/uploads/sessions`, for example `{"bytes":1024,"content_type":"image/png"}` for a 1024-byte PNG.
+3. Follow the returned signed upload instructions to transfer the bytes directly to storage. Then call `POST /api/visuals/uploads/UPLOAD_ID/complete` using the returned session ID.
+
+For an MCP attachment, send `{"file":{"download_url":"ATTACHMENT_URL","file_id":"ATTACHMENT_ID"}}` to the sessions endpoint. Suno handles the attachment transfer and the bridge returns HTTP 202 with Suno's result.
+
 ## Important limitations and security
 
 1. **Local PoC only.** Listens on `127.0.0.1` by default. Do not turn this into an Internet-facing endpoint merely by setting `HOST=0.0.0.0`. Production use requires HTTPS, strong auth, per-user OAuth, encrypted durable token storage, rate limits/quotas, upload-size and concurrency controls.
-2. **Uploaded files are buffered only in RAM** up to `MAX_UPLOAD_MB`; no temp files are written. Single-request upload uses an HTTPS PUT and rejects redirects. It never forwards file bytes as the MCP tool JSON body.
+2. **Single-request audio uploads are buffered only in RAM** up to `MAX_UPLOAD_MB`; no temp files are written. The endpoint uses an HTTPS PUT and rejects redirects. It never forwards file bytes as the MCP tool JSON body.
 3. **Chargeable operations are not automatically retried.** Supply a unique `idempotency_key` to safely repeat the *same* generation request if the upstream request timed out; reusing a key with different parameters will fail.
 4. **Generation is asynchronous**: creation returns clip ID(s). Process every returned ID; `/api/songs/wait` accepts batches of up to twelve. Remixes require the source clip's status to be `complete`.
 5. This project does not expose waveform editor, 5-second generator, or a server-side MP3 download proxy.

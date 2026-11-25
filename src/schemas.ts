@@ -29,6 +29,7 @@ const createSongFields = {
   duration_guidance: z.boolean().optional(),
   duration_strict: z.boolean().optional(),
   model: z.string().min(1).optional(),
+  custom_model_id: z.string().optional(),
   negative_style: z.string().min(1).max(1000).optional(),
   vocal_gender: z.enum(["male", "female"]).optional(),
   voice_id: boundedId.optional(),
@@ -124,6 +125,7 @@ const remixFields = {
   idempotency_key: idempotencyKey.optional(),
   lyrics: z.string().min(1).max(5000).optional(),
   model: z.string().min(1).optional(),
+  custom_model_id: z.string().optional(),
   negative_style: z.string().min(1).max(1000).optional(),
   style: z.string().min(1).max(1000).optional(),
   workspace_id: z.string().uuid().optional()
@@ -321,6 +323,13 @@ export const voicesQuerySchema = z.object({
   query: z.string().min(1).max(200).optional()
 }).strict();
 
+export const customModelsQuerySchema = z.object({
+  collection: z.enum(["own", "shared"]).optional(),
+  cursor: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  query: z.string().min(1).max(200).optional()
+}).strict();
+
 export const playlistsQuerySchema = z.object({
   cursor: libraryFields.cursor,
   limit: libraryFields.limit,
@@ -359,6 +368,175 @@ export const updateWorkspaceClipsSchema = z.object({
   message: "Provide songs in add or remove",
   path: ["add"]
 });
+
+const visualAspect = z.enum(["1:1", "9:16", "16:9"]);
+const visualView = z.enum(["full", "summary"]);
+const queryBoolean = z.enum(["true", "false"]).transform((value) => value === "true");
+
+export const charactersQuerySchema = z.object({
+  presets: queryBoolean.optional()
+}).strict();
+
+export const visualLibraryQuerySchema = z.object({
+  cursor: z.string().optional(),
+  liked: queryBoolean.optional(),
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+  media_type: z.enum(["image", "video"]).optional(),
+  sequence_id: z.string().optional(),
+  song_id: z.string().optional()
+}).strict();
+
+export const visualShowQuerySchema = z.object({
+  at: z.string().optional(),
+  ids: z.string().optional()
+}).strict();
+
+export const visualWaitSchema = z.object({
+  ids: z.string().optional(),
+  view: visualView.optional()
+}).strict();
+
+const visualGenerationFields = {
+  aspect: visualAspect.optional(),
+  dry_run: z.boolean().optional(),
+  idempotency_key: idempotencyKey.optional(),
+  model: z.string().optional()
+};
+
+const visualPromptFields = {
+  ...visualGenerationFields,
+  prompt: z.string(),
+  sequence_id: z.string().optional(),
+  shot_id: z.string().optional()
+};
+
+export const createImageSchema = z.object(visualPromptFields).strict();
+
+export const createVideoSchema = z.object({
+  ...visualPromptFields,
+  duration_s: z.number().int().min(5).max(15).optional(),
+  first_frame_asset_id: z.string().optional(),
+  last_frame_asset_id: z.string().optional(),
+  lip_sync: z.boolean().optional(),
+  resolution: z.string().optional(),
+  song_id: z.string().optional(),
+  song_start_s: z.number().min(0).optional()
+}).strict();
+
+export const assembleVideoSchema = z.object({
+  aspect: visualAspect.optional(),
+  clips: z.array(z.looseObject({
+    asset_id: z.string(),
+    duration_s: z.number().positive().max(60).optional(),
+    trim_end_s: z.number().optional(),
+    trim_start_s: z.number().min(0).optional()
+  })).min(1).max(40),
+  idempotency_key: idempotencyKey.optional(),
+  lyrics: z.boolean().optional(),
+  song_id: z.string(),
+  song_start_s: z.number().min(0).optional()
+}).strict();
+
+export const sequencesQuerySchema = z.object({
+  cursor: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(20).optional(),
+  query: z.string().optional()
+}).strict();
+
+export const sequenceQuerySchema = z.object({
+  view: visualView.optional()
+}).strict();
+
+const sequenceReference = z.looseObject({
+  asset_ids: z.array(z.string()).min(1).max(3),
+  description: z.string().max(500).optional(),
+  name: z.string().max(60)
+});
+
+const sequenceShotFields = {
+  characters: z.array(z.string()).optional(),
+  notes: z.string().max(1000).optional(),
+  set: z.string().optional()
+};
+
+const sequenceStyle = z.looseObject({});
+
+export const createSequenceSchema = z.object({
+  aspect: visualAspect.optional(),
+  characters: z.array(sequenceReference).max(12).optional(),
+  idempotency_key: idempotencyKey.optional(),
+  lyrics: z.boolean().optional(),
+  sets: z.array(sequenceReference).max(12).optional(),
+  shots: z.array(z.looseObject({
+    ...sequenceShotFields,
+    duration_s: z.number().positive().max(15)
+  })).min(1).max(200),
+  song_id: z.string().optional(),
+  song_start_s: z.number().min(0).optional(),
+  style: sequenceStyle.optional(),
+  title: z.string().optional()
+}).strict();
+
+const sequenceReferenceUpdate = sequenceReference.partial({ asset_ids: true }).extend({
+  delete: z.boolean().optional()
+});
+
+export const updateSequenceSchema = z.object({
+  characters: z.array(sequenceReferenceUpdate).optional(),
+  idempotency_key: idempotencyKey.optional(),
+  ops: z.array(z.looseObject({
+    action: z.enum(["move", "delete", "trim", "split", "add"]),
+    after_shot_id: z.string().optional(),
+    asset_id: z.string().optional(),
+    at_s: z.number().positive().optional(),
+    duration_s: z.number().positive().optional(),
+    notes: z.string().max(1000).optional(),
+    shot_id: z.string().optional(),
+    trim_end_s: z.number().positive().optional(),
+    trim_start_s: z.number().min(0).optional()
+  })).max(49).optional(),
+  sets: z.array(sequenceReferenceUpdate).optional(),
+  shots: z.array(z.looseObject({
+    ...sequenceShotFields,
+    asset_id: z.string().optional(),
+    shot_id: z.string()
+  })).optional(),
+  style: sequenceStyle.optional(),
+  view: z.enum(["full", "changed"]).optional()
+}).strict();
+
+export const generateSequenceSchema = z.object({
+  ...visualGenerationFields,
+  resolution: z.string().optional(),
+  shots: z.array(z.looseObject({
+    continues_shot_id: z.string().optional(),
+    first_frame_asset_id: z.string().optional(),
+    last_frame_asset_id: z.string().optional(),
+    leads_into_shot_id: z.string().optional(),
+    lip_sync: z.boolean().optional(),
+    prompt: z.string(),
+    shot_id: z.string()
+  })).min(1).max(8),
+  step: z.enum(["keyframes", "clips"])
+}).strict();
+
+export const visualUploadConsentSchema = z.object({
+  decisions: z.array(z.looseObject({
+    consent_key: z.string(),
+    outcome: z.string(),
+    version: z.number().int()
+  })).min(1)
+}).strict();
+
+export const visualUploadCreateSchema = z.object({
+  bytes: z.number().int().min(1).optional(),
+  content_type: z.enum([
+    "image/jpeg", "image/png", "image/webp", "image/bmp",
+    "video/mp4", "video/quicktime", "video/webm", "video/x-msvideo",
+    "video/x-matroska", "video/x-ms-wmv"
+  ]).optional(),
+  file: attachmentSchema.optional()
+}).strict();
 
 export type CreateSongInput = z.infer<typeof createSongSchema>;
 export type CreateSampleInput = z.infer<typeof createSampleSchema>;
